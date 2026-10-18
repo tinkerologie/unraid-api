@@ -842,6 +842,11 @@ class UnraidClient:
                     )
                 self._resolved_url = f"{protocol}://{request_host}{port_suffix}/graphql"
 
+    @property
+    def _ws_receive_timeout(self) -> int:
+        """Seconds a subscription WebSocket may wait for a message."""
+        return self.timeout * 10
+
     async def _ws_connect_and_init(
         self,
         ws_url: str,
@@ -856,7 +861,7 @@ class UnraidClient:
                 protocols=["graphql-transport-ws"],
                 headers=headers,
                 max_msg_size=16 * 1024 * 1024,
-                receive_timeout=self.timeout * 10,
+                receive_timeout=self._ws_receive_timeout,
             )
         except TimeoutError as err:
             raise UnraidTimeoutError(f"WebSocket connection timed out: {err}") from err
@@ -865,37 +870,51 @@ class UnraidClient:
         except aiohttp.ClientError as err:
             raise UnraidConnectionError(f"WebSocket connection failed: {err}") from err
 
-        # --- connection_init ---
-        await ws.send_str(
-            json.dumps(
-                {
-                    "type": "connection_init",
-                    "payload": headers,
-                }
+        # Close the socket if the handshake fails; subscribe() only owns it
+        # once this method returns.
+        try:
+            # --- connection_init ---
+            await ws.send_str(
+                json.dumps(
+                    {
+                        "type": "connection_init",
+                        "payload": headers,
+                    }
+                )
             )
-        )
 
-        # --- wait for connection_ack ---
-        ack_msg = await ws.receive()
-        if ack_msg.type in (
-            aiohttp.WSMsgType.CLOSE,
-            aiohttp.WSMsgType.CLOSING,
-            aiohttp.WSMsgType.CLOSED,
-        ):
-            raise UnraidConnectionError(
-                "WebSocket closed during connection_init handshake"
-            )
-        if ack_msg.type == aiohttp.WSMsgType.ERROR:
-            raise UnraidConnectionError(
-                f"WebSocket error during handshake: {ws.exception()}"
-            )
-        ack_data = json.loads(ack_msg.data)
-        if ack_data.get("type") != "connection_ack":
-            msg_type = ack_data.get("type", "unknown")
-            if msg_type == "connection_error":
-                payload = ack_data.get("payload", {})
-                raise UnraidAuthenticationError(f"Connection rejected: {payload}")
-            raise UnraidConnectionError(f"Expected connection_ack, got: {msg_type}")
+            # --- wait for connection_ack ---
+            try:
+                ack_msg = await ws.receive()
+            except TimeoutError as err:
+                raise UnraidTimeoutError(
+                    f"No connection_ack received within {self._ws_receive_timeout}s"
+                ) from err
+            if ack_msg.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSING,
+                aiohttp.WSMsgType.CLOSED,
+            ):
+                raise UnraidConnectionError(
+                    "WebSocket closed during connection_init handshake"
+                )
+            if ack_msg.type == aiohttp.WSMsgType.ERROR:
+                raise UnraidConnectionError(
+                    f"WebSocket error during handshake: {ws.exception()}"
+                )
+            ack_data = json.loads(ack_msg.data)
+            if ack_data.get("type") != "connection_ack":
+                msg_type = ack_data.get("type", "unknown")
+                if msg_type == "connection_error":
+                    payload = ack_data.get("payload", {})
+                    raise UnraidAuthenticationError(f"Connection rejected: {payload}")
+                raise UnraidConnectionError(f"Expected connection_ack, got: {msg_type}")
+        except BaseException:
+            try:
+                await ws.close()
+            except Exception:
+                _LOGGER.debug("Error closing WebSocket after handshake", exc_info=True)
+            raise
         return ws
 
     async def subscribe(
@@ -920,7 +939,9 @@ class UnraidClient:
         Raises:
             UnraidConnectionError: On WebSocket connection or protocol errors.
             UnraidAuthenticationError: On authentication failures.
-            UnraidTimeoutError: On connection timeout.
+            UnraidTimeoutError: On connection or ``connection_ack`` timeout, or
+                when no message arrives for ``timeout * 10`` seconds while
+                streaming. Callers are expected to reconnect.
 
         Example::
 
@@ -959,7 +980,13 @@ class UnraidClient:
 
             # --- receive loop ---
             while True:
-                msg = await ws.receive()
+                try:
+                    msg = await ws.receive()
+                except TimeoutError as err:
+                    raise UnraidTimeoutError(
+                        "No message received on subscription for "
+                        f"{self._ws_receive_timeout}s"
+                    ) from err
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     data = json.loads(msg.data)

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Idle subscription timeouts** — `subscribe()` and the typed `subscribe_*()` helpers now raise `UnraidTimeoutError` instead of a raw `TimeoutError` when no message arrives for `timeout * 10` seconds, or when the server does not send `connection_ack` in that time. Consumers that already reconnect on `UnraidTimeoutError`, such as ha-unraid, no longer log an error with a traceback each time a quiet subscription goes idle ([#118](https://github.com/tinkerologie/unraid-api/issues/118)).
+- **WebSocket closed on handshake failure** — `subscribe()` now closes the WebSocket when the `connection_init` handshake fails (socket closed, WebSocket error, `connection_error`, unexpected message, or an acknowledgement timeout). Before, the socket opened by `ws_connect()` was left open because `subscribe()` only took ownership of it after the handshake succeeded ([#119](https://github.com/tinkerologie/unraid-api/issues/119)).
+
 ### Changed
 - Pull requests get path labels and at most one type label, `bug` or `enhancement`, from the shared tinkerologie PR labeler. Dependabot pull requests whose largest update is a patch or minor version merge automatically once the checks and commit statuses on their head commit have finished without a failure (a Codecov check that is still pending is not waited for; a Codecov failure blocks); majors, and pull requests with open review threads, stay for review.
 - Release workflows hardened (least-privilege job permissions, no expressions in shell scripts, no persisted checkout credentials, no dependency caches); scheduled workflows run on Australia/Brisbane time. Relicensed from MIT to the Apache License 2.0; NOTICE retains the MIT notice for earlier releases.
