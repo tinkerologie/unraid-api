@@ -347,6 +347,16 @@ class TestSubscribeErrors:
                 pass
         assert ws.closed
 
+    async def test_error_during_handshake(self, ws_client: UnraidClient) -> None:
+        """Test WebSocket ERROR message during connection_init handshake."""
+        ws = MockWebSocket([_ws_error_msg()])
+        ws_client._session.ws_connect = AsyncMock(return_value=ws)  # type: ignore[union-attr]
+
+        with pytest.raises(UnraidConnectionError, match="error during handshake"):
+            async for _ in ws_client.subscribe("subscription { test }"):
+                pass
+        assert ws.closed
+
     async def test_connection_rejected(self, ws_client: UnraidClient) -> None:
         """Test server rejects connection with connection_error."""
         error_msg = _ws_text_msg(
