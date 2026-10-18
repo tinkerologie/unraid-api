@@ -139,6 +139,8 @@ async with UnraidClient(host, api_key) as client:
         print(f"Array state: {data['state']}")
 ```
 
+A subscription that receives no message for `timeout * 10` seconds (300 s with the default `timeout=30`) raises `UnraidTimeoutError`. This is normal for rare events on a quiet server, such as notifications or UPS changes; catch it and reconnect.
+
 ## Pydantic Models
 
 Response data can be parsed into typed models:

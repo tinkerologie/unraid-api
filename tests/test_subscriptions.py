@@ -50,7 +50,7 @@ def _ws_error_msg() -> MagicMock:
 class MockWebSocket:
     """Mock WebSocket that replays a list of messages."""
 
-    def __init__(self, messages: list[MagicMock]) -> None:
+    def __init__(self, messages: list[MagicMock | BaseException]) -> None:
         self._messages = messages
         self._send_history: list[str] = []
         self.closed = False
@@ -64,6 +64,8 @@ class MockWebSocket:
             return _ws_close_msg()
         msg = self._messages[self._receive_index]
         self._receive_index += 1
+        if isinstance(msg, BaseException):
+            raise msg
         return msg
 
     def __aiter__(self) -> MockWebSocket:
@@ -74,6 +76,7 @@ class MockWebSocket:
             raise StopAsyncIteration
         msg = self._messages[self._receive_index]
         self._receive_index += 1
+        assert isinstance(msg, MagicMock)
         return msg
 
     async def close(self) -> None:
@@ -342,6 +345,7 @@ class TestSubscribeErrors:
         ):
             async for _ in ws_client.subscribe("subscription { test }"):
                 pass
+        assert ws.closed
 
     async def test_connection_rejected(self, ws_client: UnraidClient) -> None:
         """Test server rejects connection with connection_error."""
@@ -354,6 +358,7 @@ class TestSubscribeErrors:
         with pytest.raises(UnraidAuthenticationError, match="Connection rejected"):
             async for _ in ws_client.subscribe("subscription { test }"):
                 pass
+        assert ws.closed
 
     async def test_unexpected_ack_type(self, ws_client: UnraidClient) -> None:
         """Test unexpected message type instead of connection_ack."""
@@ -364,6 +369,55 @@ class TestSubscribeErrors:
         with pytest.raises(UnraidConnectionError, match="Expected connection_ack"):
             async for _ in ws_client.subscribe("subscription { test }"):
                 pass
+        assert ws.closed
+
+    async def test_ack_receive_timeout(self, ws_client: UnraidClient) -> None:
+        """Test timeout while waiting for connection_ack."""
+        ws = MockWebSocket([TimeoutError()])
+        ws_client._session.ws_connect = AsyncMock(return_value=ws)  # type: ignore[union-attr]
+
+        with pytest.raises(UnraidTimeoutError, match="connection_ack") as exc_info:
+            async for _ in ws_client.subscribe("subscription { test }"):
+                pass
+        assert isinstance(exc_info.value.__cause__, TimeoutError)
+        assert ws.closed
+
+    async def test_handshake_close_error_keeps_original(
+        self, ws_client: UnraidClient
+    ) -> None:
+        """Test a close failure after a failed handshake keeps the original error."""
+        ws = MockWebSocket([TimeoutError()])
+        ws.close = AsyncMock(side_effect=RuntimeError("close failed"))  # type: ignore[method-assign]
+        ws_client._session.ws_connect = AsyncMock(return_value=ws)  # type: ignore[union-attr]
+
+        with pytest.raises(UnraidTimeoutError, match="connection_ack"):
+            async for _ in ws_client.subscribe("subscription { test }"):
+                pass
+        ws.close.assert_awaited_once()
+
+    async def test_idle_receive_timeout(self, ws_client: UnraidClient) -> None:
+        """Test an idle subscription timeout raises UnraidTimeoutError and cleans up."""
+        ack = _ws_text_msg({"type": "connection_ack"})
+        next1 = _ws_text_msg(
+            {
+                "id": "test",
+                "type": "next",
+                "payload": {"data": {"value": 1}},
+            }
+        )
+        ws = MockWebSocket([ack, next1, TimeoutError()])
+        ws_client._session.ws_connect = AsyncMock(return_value=ws)  # type: ignore[union-attr]
+
+        gen = ws_client.subscribe("subscription { test }")
+        assert await gen.__anext__() == {"value": 1}
+        with pytest.raises(UnraidTimeoutError, match="300s") as exc_info:
+            await gen.__anext__()
+        assert isinstance(exc_info.value.__cause__, TimeoutError)
+
+        assert ws.closed
+        sent = [json.loads(m) for m in ws._send_history]
+        sub_id = next(m["id"] for m in sent if m["type"] == "subscribe")
+        assert {"id": sub_id, "type": "complete"} in sent
 
     async def test_cleanup_on_generator_break(self, ws_client: UnraidClient) -> None:
         """Test that WebSocket is cleaned up when consumer breaks early."""
