@@ -51,15 +51,18 @@ class MockWebSocket:
     """Mock WebSocket that replays a list of messages."""
 
     def __init__(self, messages: list[MagicMock | BaseException]) -> None:
+        """Queue messages, or exceptions for receive() to raise."""
         self._messages = messages
         self._send_history: list[str] = []
         self.closed = False
         self._receive_index = 0
 
     async def send_str(self, data: str) -> None:
+        """Record a sent frame."""
         self._send_history.append(data)
 
     async def receive(self) -> MagicMock:
+        """Return the next queued message, or raise it if it is an exception."""
         if self._receive_index >= len(self._messages):
             return _ws_close_msg()
         msg = self._messages[self._receive_index]
@@ -69,9 +72,11 @@ class MockWebSocket:
         return msg
 
     def __aiter__(self) -> MockWebSocket:
+        """Return the iterator."""
         return self
 
     async def __anext__(self) -> MagicMock:
+        """Return the next queued message."""
         if self._receive_index >= len(self._messages):
             raise StopAsyncIteration
         msg = self._messages[self._receive_index]
@@ -80,9 +85,11 @@ class MockWebSocket:
         return msg
 
     async def close(self) -> None:
+        """Mark the socket closed."""
         self.closed = True
 
     def exception(self) -> Exception | None:
+        """Return no stored exception."""
         return None
 
 
@@ -353,6 +360,30 @@ class TestSubscribeErrors:
         ws_client._session.ws_connect = AsyncMock(return_value=ws)  # type: ignore[union-attr]
 
         with pytest.raises(UnraidConnectionError, match="error during handshake"):
+            async for _ in ws_client.subscribe("subscription { test }"):
+                pass
+        assert ws.closed
+
+    async def test_send_error_during_handshake(self, ws_client: UnraidClient) -> None:
+        """Test a connection_init send failure keeps the error and closes the socket."""
+        ws = MockWebSocket([])
+        ws.send_str = AsyncMock(side_effect=ConnectionResetError("reset"))  # type: ignore[method-assign]
+        ws_client._session.ws_connect = AsyncMock(return_value=ws)  # type: ignore[union-attr]
+
+        with pytest.raises(ConnectionResetError, match="reset"):
+            async for _ in ws_client.subscribe("subscription { test }"):
+                pass
+        assert ws.closed
+
+    async def test_malformed_ack(self, ws_client: UnraidClient) -> None:
+        """Test a non-JSON acknowledgement keeps the error and closes the socket."""
+        bad_ack = MagicMock()
+        bad_ack.type = aiohttp.WSMsgType.TEXT
+        bad_ack.data = "not json"
+        ws = MockWebSocket([bad_ack])
+        ws_client._session.ws_connect = AsyncMock(return_value=ws)  # type: ignore[union-attr]
+
+        with pytest.raises(json.JSONDecodeError):
             async for _ in ws_client.subscribe("subscription { test }"):
                 pass
         assert ws.closed
