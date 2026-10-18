@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.2] - 2026-10-18
+
 ### Fixed
 
 - **Idle subscription timeouts** — `subscribe()` and the typed `subscribe_*()` helpers now raise `UnraidTimeoutError` instead of a raw `TimeoutError` when no message arrives for `timeout * 10` seconds, or when the server does not send `connection_ack` in that time. Consumers that already reconnect on `UnraidTimeoutError`, such as ha-unraid, no longer log an error with a traceback each time a quiet subscription goes idle ([#118](https://github.com/tinkerologie/unraid-api/issues/118)).
@@ -512,7 +514,8 @@ Return dict/list for flexible access:
 - `PhysicalDisk`
 - `Notification`, `NotificationOverview`
 
-[Unreleased]: https://github.com/tinkerologie/unraid-api/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/tinkerologie/unraid-api/compare/v1.13.2...HEAD
+[1.13.2]: https://github.com/tinkerologie/unraid-api/compare/v1.13.1...v1.13.2
 [1.8.0]: https://github.com/tinkerologie/unraid-api/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/tinkerologie/unraid-api/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/tinkerologie/unraid-api/compare/v1.6.0...v1.7.0
