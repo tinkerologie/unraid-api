@@ -7,9 +7,10 @@
 | Key | Value |
 | --- | --- |
 | **Name** | Unraid API Python Library |
-| **Repository** | `github.com/ruaan-deysel/unraid-api` |
+| **Repository** | `github.com/tinkerologie/unraid-api` |
 | **Default Branch** | `main` |
-| **Description** | Python client library and CLI for interacting with the Unraid Management Agent REST/WebSocket API. |
+| **Description** | Python client library and CLI for the Unraid GraphQL API. |
+| **Primary Consumer** | The [ha-unraid](https://github.com/tinkerologie/ha-unraid) Home Assistant integration |
 
 ## Mandatory Development Workflow for AI Agents
 
@@ -37,11 +38,133 @@ All AI coding assistants (Claude Code, Gemini, GitHub Copilot, Cursor, Roo, Devi
 - `mypy src` — Static type checking
 - `pre-commit run --all-files` — Run all configured pre-commit hooks
 
+Dependencies are managed with `uv`; run the tools above through `uv run` (for example
+`uv run pytest`). The pre-commit hooks run ruff, mypy and security checks.
+
+```bash
+uv sync --all-extras                                                     # Setup
+uv run pytest tests/ -v --cov=src/unraid_api                             # All tests with coverage
+uv run pytest tests/test_client.py -v                                    # Single test file
+uv run pytest tests/test_client.py::TestClassName::test_method_name -v   # Single test
+uv run ruff format .                                                     # Format
+```
+
+## Architecture
+
+```text
+src/unraid_api/
+├── __init__.py      # Public exports, version
+├── client.py        # UnraidClient - async GraphQL client with SSL auto-discovery
+├── models.py        # Pydantic response models (UnraidBaseModel ignores unknown fields)
+└── exceptions.py    # UnraidAPIError hierarchy (Connection, Auth, Timeout)
+```
+
+See `UNRAIDAPI.md` for available GraphQL fields and schema documentation.
+
+### Client Design
+
+- **Async context manager**: `async with UnraidClient(host, api_key) as client:`
+- **Session injection**: Accepts external `aiohttp.ClientSession` for HA integration (won't be closed by client)
+- **SSL auto-discovery**: Handles Unraid's "No", "Yes", and "Strict" SSL modes via redirect detection
+- **GraphQL variables**: Always use variables, never string interpolation for security
+
+### Key Patterns
+
+**GraphQL mutations use PrefixedID type:**
+
+```python
+mutation = """
+    mutation StartContainer($id: PrefixedID!) {
+        docker { start(id: $id) { id state } }
+    }
+"""
+await self.mutate(mutation, {"id": container_id})
+```
+
+**Pydantic models extend UnraidBaseModel for forward compatibility:**
+
+```python
+class ArrayDisk(UnraidBaseModel):
+    id: str
+    name: str | None = None
+```
+
+### Disk Standby Awareness
+
+- `get_array_status()` and `get_array_disks()` do NOT wake sleeping disks (safe for polling)
+- `get_physical_disks()` WILL wake sleeping disks (use sparingly)
+- Check `isSpinning` field; `temp` is null/0 for standby disks
+
+## Test Requirements
+
+- TDD: Write tests first
+- Use `pytest-asyncio` with `asyncio_mode = "auto"`
+- Mock fixtures in `tests/conftest.py`
+
 ## Boundaries and Safety Constraints
 
 - Always: Write tests for any new or modified functionality, verify changes locally, and update CHANGELOG.md under `[Unreleased]`.
 - Ask first: Major architectural changes, removing public APIs, or adding heavy external dependencies.
 - Never: Commit secrets, credentials, API keys, or private certificates. Never commit directly to `main`.
+
+## Working Principles
+
+### Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+### Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+
+```text
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
 ## Issue and Pull Request Governance
 
