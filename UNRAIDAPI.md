@@ -1409,7 +1409,8 @@ mutation {
   }
 }
 
-# Start an encrypted array; secrets go in variables, never query text.
+# Start an encrypted array over certificate-verified HTTPS.
+# Secrets go in variables, never query text.
 # Variables: {"input": {"desiredState": "START", "decryptionPassword": "...",
 #                      "decryptionKeyfile": "<data URL or raw base64 contents>"}}
 mutation StartEncryptedArray($input: ArrayStateInput!) {

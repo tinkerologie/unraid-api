@@ -78,7 +78,7 @@ Before a pull request can be merged, it must satisfy all automated quality gates
 
 ### Prerequisites and Setup
 
-- Python 3.10 or later
+- Python 3.11 or later
 - Dependencies installed via `uv sync` or `pip install -e ".[test,dev]"`
 - Pre-commit (`pre-commit install`)
 

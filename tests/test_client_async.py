@@ -8091,9 +8091,10 @@ class TestAPI437Alignment:
         self, password: str | None, keyfile: str | None
     ) -> None:
         client = UnraidClient("unraid.test", "test-key")
+        method = "mutate" if password is None and keyfile is None else "_execute_query"
         with patch.object(
             client,
-            "mutate",
+            method,
             new_callable=AsyncMock,
             return_value={"array": {"state": "STARTED"}},
         ) as mutate:
@@ -8112,6 +8113,7 @@ class TestAPI437Alignment:
                     expected["decryptionKeyfile"] = keyfile
                 assert mutate.call_args.args[1] == {"input": expected}
                 assert "$input: ArrayStateInput!" in text
+                assert mutate.call_args.kwargs == {"require_https": True}
                 for secret in (password, keyfile):
                     if secret:
                         assert secret not in text
@@ -8200,3 +8202,315 @@ class TestAPI437Alignment:
             result = await client.typed_get_vms()
             assert ("uuid" in query.call_args.args[0]) is has_uuid
             assert result[0].uuid == ("example-uuid" if has_uuid else None)
+
+
+class TestEncryptedArrayTransport:
+    """Decryption values never leave the client over a plaintext connection."""
+
+    @pytest.mark.parametrize(
+        "destination",
+        [
+            "http://unraid.test/graphql",
+            "https://other.myunraid.net/graphql",
+            "https://unraid.test:444/graphql",
+        ],
+    )
+    @pytest.mark.parametrize(
+        "credentials",
+        [
+            {"decryption_password": "example-password"},  # pragma: allowlist secret
+            {"decryption_keyfile": "ZXhhbXBsZQ=="},
+        ],
+    )
+    async def test_cached_unsafe_destination_is_ignored(
+        self, destination: str, credentials: dict[str, str]
+    ) -> None:
+        async with aiointercept(mock_external_urls=True) as m:
+            m.post(
+                "https://unraid.test/graphql",
+                payload={"data": {"array": {"setState": {"state": "STARTED"}}}},
+            )
+            async with UnraidClient("unraid.test", "test-key") as client:
+                client._resolved_url = destination
+                with (
+                    patch.object(
+                        client,
+                        "_discover_redirect_url",
+                        side_effect=AssertionError("Discovery must not run"),
+                    ),
+                    patch.object(
+                        client.session, "post", wraps=client.session.post
+                    ) as post,
+                ):
+                    await client.start_array(**credentials)
+                assert post.call_count == 1
+                assert post.call_args.args[0] == "https://unraid.test/graphql"
+                assert client._resolved_url == destination
+
+    @pytest.mark.parametrize(
+        "redirect", ["http://unraid.test/graphql", "http://tower.myunraid.net/graphql"]
+    )
+    async def test_post_downgrade_rejected(self, redirect: str) -> None:
+        async with aiointercept(mock_external_urls=True) as m:
+            m.post(
+                "https://unraid.test/graphql",
+                status=307,
+                headers={"Location": redirect},
+            )
+            async with UnraidClient("unraid.test", "test-key") as client:
+                client._resolved_url = "https://unraid.test/graphql"
+                with (
+                    patch.object(
+                        client.session, "post", wraps=client.session.post
+                    ) as post,
+                    pytest.raises(UnraidSSLError, match="requires an HTTPS"),
+                ):
+                    await client.start_array(
+                        # pragma: allowlist nextline secret
+                        **{"decryption_password": "example-password"}
+                    )
+                assert post.call_count == 1
+                assert client._resolved_url == "https://unraid.test/graphql"
+
+    @pytest.mark.parametrize("redirect", [False, True])
+    async def test_https_credentials_in_variables_only(self, redirect: bool) -> None:
+        async with aiointercept(mock_external_urls=True) as m:
+            final_url = (
+                "https://unraid.test/redirect/graphql"
+                if redirect
+                else "https://unraid.test/graphql"
+            )
+            if redirect:
+                m.post(
+                    "https://unraid.test/graphql",
+                    status=307,
+                    headers={"Location": final_url},
+                )
+            m.post(
+                final_url,
+                payload={"data": {"array": {"setState": {"state": "STARTED"}}}},
+            )
+            async with UnraidClient("unraid.test", "test-key") as client:
+                client._resolved_url = "https://unraid.test/graphql"
+                with patch.object(
+                    client.session, "post", wraps=client.session.post
+                ) as post:
+                    result = await client.start_array(
+                        # pragma: allowlist nextline secret
+                        **{"decryption_password": "example-password"}
+                    )
+                assert result["array"]["setState"]["state"] == "STARTED"
+                assert post.call_count == (2 if redirect else 1)
+                for call in post.call_args_list:
+                    assert call.args[0].startswith("https://")
+                    assert "example-password" not in call.kwargs["json"]["query"]
+                    assert (
+                        call.kwargs["json"]["variables"]["input"]["decryptionPassword"]
+                        == "example-password"
+                    )
+
+    async def test_encrypted_start_bypasses_http_discovery(self) -> None:
+        async with aiointercept(mock_external_urls=True) as m:
+            m.get(
+                "http://unraid.test/graphql",
+                status=302,
+                headers={"Location": "https://unraid.test/graphql"},
+            )
+            m.post(
+                "https://unraid.test/graphql",
+                payload={"data": {"array": {"setState": {"state": "STARTED"}}}},
+            )
+            async with UnraidClient("unraid.test", "test-key") as client:
+                with patch.object(
+                    client,
+                    "_discover_redirect_url",
+                    side_effect=AssertionError("HTTP discovery must not run"),
+                ):
+                    result = await client.start_array(decryption_keyfile="ZXhhbXBsZQ==")
+                assert result["array"]["setState"]["state"] == "STARTED"
+
+    async def test_plain_array_start_allows_http(self) -> None:
+        async with aiointercept(mock_external_urls=True) as m:
+            m.post(
+                "http://unraid.test/graphql",
+                payload={"data": {"array": {"setState": {"state": "STARTED"}}}},
+            )
+            async with UnraidClient("unraid.test", "test-key") as client:
+                client._resolved_url = "http://unraid.test/graphql"
+                result = await client.start_array()
+                assert result["array"]["setState"]["state"] == "STARTED"
+
+
+async def test_vm_uuid_omitted_with_permissive_capabilities() -> None:
+    """Unknown schemas retain the basic VM query that works on older servers."""
+    client = UnraidClient("unraid.test", "test-key")
+    client._capabilities = ServerCapabilities.permissive()
+    with patch.object(
+        client,
+        "query",
+        new_callable=AsyncMock,
+        return_value={"vms": {"domains": [{"id": "vm:one", "name": "Example"}]}},
+    ) as query:
+        vms = await client.typed_get_vms()
+        assert "uuid" not in query.call_args.args[0]
+        assert vms[0].uuid is None
+
+
+async def test_array_decryption_rejects_unverified_tls() -> None:
+    """Disabling certificate checks cannot expose array unlock material."""
+    async with UnraidClient("unraid.test", "test-key", verify_ssl=False) as client:
+        client._resolved_url = "https://unraid.test/graphql"
+        with (
+            patch.object(client.session, "post") as post,
+            pytest.raises(UnraidSSLError, match="certificate verification"),
+        ):
+            await client.start_array(decryption_keyfile="ZXhhbXBsZQ==")
+        post.assert_not_called()
+
+
+async def test_array_decryption_overrides_unverified_injected_session() -> None:
+    """A verified per-request context overrides even an insecure shared connector."""
+    import ssl
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with (
+        aiohttp.ClientSession(connector=connector) as session,
+        aiointercept(mock_external_urls=True) as m,
+    ):
+        m.post(
+            "https://unraid.test/graphql",
+            status=307,
+            headers={"Location": "https://unraid.test/redirect/graphql"},
+        )
+        m.post(
+            "https://unraid.test/redirect/graphql",
+            payload={"data": {"array": {"setState": {"state": "STARTED"}}}},
+        )
+        async with UnraidClient("unraid.test", "test-key", session=session) as client:
+            client._resolved_url = "https://unraid.test/graphql"
+            with patch.object(session, "post", wraps=session.post) as post:
+                await client.start_array(decryption_keyfile="ZXhhbXBsZQ==")
+            assert post.call_count == 2
+            contexts = [call.kwargs["ssl"] for call in post.call_args_list]
+            assert contexts[0] is contexts[1]
+            assert contexts[0].verify_mode == ssl.CERT_REQUIRED
+            assert contexts[0].check_hostname is True
+
+
+@pytest.mark.parametrize(
+    "redirect",
+    ["https://other.myunraid.net/graphql", "https://unraid.test:444/graphql"],
+)
+async def test_array_decryption_rejects_redirect_to_another_server(
+    redirect: str,
+) -> None:
+    """A valid certificate for another endpoint does not authorize receiving secrets."""
+    async with aiointercept(mock_external_urls=True) as m:
+        m.post(
+            "https://unraid.test/graphql", status=307, headers={"Location": redirect}
+        )
+        async with UnraidClient("unraid.test", "test-key") as client:
+            client._resolved_url = "https://unraid.test/graphql"
+            with (
+                patch.object(client.session, "post", wraps=client.session.post) as post,
+                pytest.raises(UnraidSSLError, match="configured server and port"),
+            ):
+                await client.start_array(decryption_keyfile="ZXhhbXBsZQ==")
+            assert post.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("host", "https_port", "url"),
+    [
+        ("unraid.test", 8443, "https://unraid.test:8443/graphql"),
+        ("https://unraid.test:8443", 443, "https://unraid.test:8443/graphql"),
+        ("[::1]", 443, "https://[::1]/graphql"),
+    ],
+)
+async def test_array_decryption_accepts_configured_https_port(
+    host: str, https_port: int, url: str
+) -> None:
+    """Port and IPv6 configuration bind to the expected TLS endpoint."""
+    response = MagicMock()
+    response.status = 200
+    response.json = AsyncMock(
+        return_value={"data": {"array": {"setState": {"state": "STARTED"}}}}
+    )
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=response)
+    async with UnraidClient(host, "test-key", https_port=https_port) as client:
+        with (
+            patch.object(client.session, "post", return_value=context) as post,
+            patch.object(
+                client,
+                "_discover_redirect_url",
+                side_effect=AssertionError("HTTP discovery must not run"),
+            ),
+        ):
+            result = await client.start_array(decryption_keyfile="ZXhhbXBsZQ==")
+            assert result["array"]["setState"]["state"] == "STARTED"
+            assert post.call_args.args[0] == url
+
+
+async def test_failed_encrypted_start_does_not_poison_plain_request_url() -> None:
+    """An HTTP-only server still works for ordinary requests after an unlock fails."""
+    response = MagicMock()
+    response.status = 200
+    response.json = AsyncMock(return_value={"data": {"online": True}})
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=response)
+    async with UnraidClient("unraid.test", "test-key") as client:
+        with (
+            patch.object(
+                client.session,
+                "post",
+                side_effect=[aiohttp.ClientConnectionError(), context],
+            ) as post,
+            patch.object(
+                client,
+                "_discover_redirect_url",
+                new_callable=AsyncMock,
+                return_value=(None, False),
+            ) as discover,
+        ):
+            with pytest.raises(UnraidConnectionError):
+                await client.start_array(decryption_keyfile="ZXhhbXBsZQ==")
+            assert client._resolved_url is None
+            discover.assert_not_called()
+            assert await client.query("query { online }") == {"online": True}
+            discover.assert_awaited_once()
+            assert post.call_args.args[0] == "http://unraid.test/graphql"
+            assert client._resolved_url == "http://unraid.test/graphql"
+
+
+async def test_encrypted_start_rejects_invalid_configured_hostname() -> None:
+    """Malformed authority input fails before posting any unlock values."""
+    async with UnraidClient("?", "test-key") as client:
+        with (
+            patch.object(client.session, "post") as post,
+            pytest.raises(UnraidConnectionError, match="Invalid configured HTTPS"),
+        ):
+            await client.start_array(decryption_keyfile="ZXhhbXBsZQ==")
+        post.assert_not_called()
+
+
+async def test_ordinary_query_still_caches_post_redirect_destination() -> None:
+    """Unlock isolation leaves ordinary redirect discovery and caching unchanged."""
+    redirect = MagicMock()
+    redirect.status = 307
+    redirect.headers = {"Location": "https://unraid.test/graphql"}
+    response = MagicMock()
+    response.json = AsyncMock(return_value={"data": {"online": True}})
+    first = MagicMock()
+    first.__aenter__ = AsyncMock(return_value=redirect)
+    second = MagicMock()
+    second.__aenter__ = AsyncMock(return_value=response)
+    async with UnraidClient("unraid.test", "test-key") as client:
+        client._resolved_url = "http://unraid.test/graphql"
+        with patch.object(client.session, "post", side_effect=[first, second]) as post:
+            assert await client.query("query { online }") == {"online": True}
+        assert client._resolved_url == "https://unraid.test/graphql"
+        assert [call.args[0] for call in post.call_args_list] == [
+            "http://unraid.test/graphql",
+            "https://unraid.test/graphql",
+        ]

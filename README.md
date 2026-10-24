@@ -72,6 +72,9 @@ async with UnraidClient(host, api_key) as client:
 
     # Stop a container
     await client.stop_container("container:plex")
+
+    # Native restart when available; stop/wait/start on older schemas
+    await client.restart_container("container:plex")
 ```
 
 ### VM Management
@@ -89,9 +92,6 @@ async with UnraidClient(host, api_key) as client:
 
 ```python
 async with UnraidClient(host, api_key) as client:
-    # Unlock encrypted disks (optional; keyfile contents also supported)
-    await client.start_array(decryption_password=password)
-
     # Start/stop array
     await client.start_array()
     await client.stop_array()
@@ -106,6 +106,17 @@ async with UnraidClient(host, api_key) as client:
     await client.spin_up_disk("disk:1")
     await client.spin_down_disk("disk:1")
 ```
+
+For an encrypted array, replace `start_array()` above with
+`start_array(decryption_password=password)` or
+`start_array(decryption_keyfile=keyfile_contents)`. Keyfiles are data URLs or raw
+base64 contents, not paths. Decryption values require an HTTPS connection;
+HTTP destinations and redirects are rejected before transmitting them. Certificate
+verification must be enabled. For private certificates, configure system trust
+roots or `SSL_CERT_FILE`/`SSL_CERT_DIR`; encrypted starts enforce that trust even
+when using an injected session. Configure the canonical HTTPS hostname and port
+for encrypted starts: they bypass HTTP discovery, ignore cached destinations, and
+reject redirects pointing at a different server or port.
 
 ### Session Injection (Home Assistant)
 
@@ -259,7 +270,8 @@ that query still wakes disks on 4.37.6 pending
 `restart_container()` returns raw `docker.restart` data on the native path or
 `docker.start` data on the fallback path. Its `delay` argument applies only to
 the fallback. If introspection fails, permissive capabilities optimistically
-attempt native restart. `typed_get_vms()` requests `uuid` only when supported.
+attempt native restart. `typed_get_vms()` requests `uuid` only when introspection confirms support;
+unknown schemas omit it to preserve VM listing.
 
 Plugin and language installs modify the server. Follow their returned operation
 with `subscribe_plugin_install_updates(operation.id)`. `remove_array_disk()`
@@ -406,7 +418,7 @@ use the Unraid Core storage workflow instead.
 
 ## Requirements
 
-- Python 3.14+
+- Python 3.11 or later, tested on 3.11–3.15
 - Unraid 7.2.4+ with latest Unraid API
 - API key with appropriate permissions
 

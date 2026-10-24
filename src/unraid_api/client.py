@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
 import sys
 import uuid
 import warnings
@@ -23,7 +24,6 @@ from unraid_api.exceptions import (
 )
 
 if TYPE_CHECKING:
-    import ssl
     from collections.abc import AsyncGenerator
     from types import TracebackType
 
@@ -558,11 +558,14 @@ class UnraidClient:
 
         return (None, True)
 
-    async def _make_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _make_request(
+        self, payload: dict[str, Any], *, require_https: bool = False
+    ) -> dict[str, Any]:
         """Make a GraphQL request to the Unraid server.
 
         Args:
             payload: GraphQL query/mutation payload.
+            require_https: Reject unencrypted destinations before sending payloads.
 
         Returns:
             Response data dictionary.
@@ -579,34 +582,62 @@ class UnraidClient:
         if self._session is None:
             raise UnraidConnectionError("Failed to create HTTP session")
 
-        if self._resolved_url is None:
-            redirect_url, use_ssl = await self._discover_redirect_url()
-            if redirect_url:
-                self._resolved_url = redirect_url
-            else:
-                request_host = self._normalize_host_for_request()
-                if use_ssl:
-                    protocol = "https"
-                    port_suffix = (
-                        f":{self.https_port}"
-                        if self.https_port != DEFAULT_HTTPS_PORT
-                        else ""
-                    )
+        if require_https:
+            # Unlock requests use only the configured authority, without HTTP discovery
+            # or shared URL cache changes that could affect ordinary requests.
+            configured = urlparse(f"https://{self._normalize_host_for_request()}")
+            hostname = configured.hostname
+            if hostname is None:
+                raise UnraidConnectionError("Invalid configured HTTPS hostname")
+            if ":" in hostname:
+                hostname = f"[{hostname}]"
+            port = configured.port or self.https_port
+            port_suffix = f":{port}" if port != DEFAULT_HTTPS_PORT else ""
+            url = f"https://{hostname}{port_suffix}/graphql"
+        else:
+            if self._resolved_url is None:
+                redirect_url, use_ssl = await self._discover_redirect_url()
+                if redirect_url:
+                    self._resolved_url = redirect_url
                 else:
-                    protocol = "http"
-                    port_suffix = (
-                        f":{self.http_port}"
-                        if self.http_port != DEFAULT_HTTP_PORT
-                        else ""
+                    request_host = self._normalize_host_for_request()
+                    if use_ssl:
+                        protocol = "https"
+                        port_suffix = (
+                            f":{self.https_port}"
+                            if self.https_port != DEFAULT_HTTPS_PORT
+                            else ""
+                        )
+                    else:
+                        protocol = "http"
+                        port_suffix = (
+                            f":{self.http_port}"
+                            if self.http_port != DEFAULT_HTTP_PORT
+                            else ""
+                        )
+                    self._resolved_url = (
+                        f"{protocol}://{request_host}{port_suffix}/graphql"
                     )
-                self._resolved_url = f"{protocol}://{request_host}{port_suffix}/graphql"
-            _LOGGER.debug("Using URL: %s", self._sanitize_url(self._resolved_url))
+                _LOGGER.debug("Using URL: %s", self._sanitize_url(self._resolved_url))
 
-        url = self._resolved_url
+            url = self._resolved_url
+        request_options: dict[str, Any] = {}
+        if require_https:
+            if not self.verify_ssl:
+                raise UnraidSSLError(
+                    "Array decryption requires an HTTPS connection with "
+                    "certificate verification enabled"
+                )
+            # Explicit context also protects callers injecting an unverified session.
+            request_options["ssl"] = await asyncio.to_thread(ssl.create_default_context)
 
         try:
             async with self._session.post(
-                url, json=payload, headers=self._auth_headers, allow_redirects=False
+                url,
+                json=payload,
+                headers=self._auth_headers,
+                allow_redirects=False,
+                **request_options,
             ) as response:
                 # Follow redirects if needed
                 if response.status in (301, 302, 307, 308):
@@ -628,12 +659,24 @@ class UnraidClient:
                                 f"Redirect to untrusted host rejected: "
                                 f"{self._sanitize_url(redirect_url)}"
                             )
-                        self._resolved_url = redirect_url
+                        if require_https and (
+                            parsed_redirect.scheme != "https"
+                            or parsed_redirect.hostname != parsed_original.hostname
+                            or (parsed_redirect.port or DEFAULT_HTTPS_PORT)
+                            != (parsed_original.port or DEFAULT_HTTPS_PORT)
+                        ):
+                            raise UnraidSSLError(
+                                "Array decryption requires an HTTPS connection "
+                                "to the configured server and port"
+                            )
+                        if not require_https:
+                            self._resolved_url = redirect_url
                         async with self._session.post(
                             redirect_url,
                             json=payload,
                             headers=self._auth_headers,
                             allow_redirects=False,
+                            **request_options,
                         ) as redirect_response:
                             redirect_response.raise_for_status()
                             result: dict[str, Any] = await redirect_response.json()
@@ -687,11 +730,24 @@ class UnraidClient:
             UnraidAuthenticationError: On authentication failures.
 
         """
+        return await self._execute_query(query, variables)
+
+    async def _execute_query(
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+        *,
+        require_https: bool = False,
+    ) -> dict[str, Any]:
+        """Execute and classify a response, optionally requiring encrypted transport."""
         payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
-        response = await self._make_request(payload)
+        if require_https:
+            response = await self._make_request(payload, require_https=True)
+        else:
+            response = await self._make_request(payload)
         data = response.get("data", {})
 
         if "errors" in response:
@@ -1572,7 +1628,9 @@ class UnraidClient:
         from unraid_api.models import VmDomain
 
         caps = await self.get_capabilities()
-        uuid_field = "uuid" if caps.has("VmDomain.uuid") else ""
+        uuid_field = (
+            "uuid" if not caps.is_permissive and caps.has("VmDomain.uuid") else ""
+        )
         query_str = """
             query {
                 vms {
@@ -1978,6 +2036,14 @@ class UnraidClient:
 
         Servers without these input fields return a GraphQL error. Decryption
         values are sent only through variables, never interpolated into queries.
+        Decryption values require HTTPS, including redirects; HTTP-only servers
+        raise UnraidSSLError before those values are sent.
+        Certificate verification must be enabled. Encrypted starts use system
+        trust roots (including SSL_CERT_FILE/SSL_CERT_DIR), even with an injected
+        session; configure those roots to trust a private server certificate.
+        Configure the canonical HTTPS hostname and port: encrypted starts bypass
+        HTTP discovery, ignore cached destinations and reject redirects to other
+        servers.
 
         Returns:
             Mutation response data with array state.
@@ -1989,13 +2055,14 @@ class UnraidClient:
                 array_input["decryptionPassword"] = decryption_password
             if decryption_keyfile is not None:
                 array_input["decryptionKeyfile"] = decryption_keyfile
-            return await self.mutate(
+            return await self._execute_query(
                 """
                 mutation StartArray($input: ArrayStateInput!) {
                     array { setState(input: $input) { id state } }
                 }
                 """,
                 {"input": array_input},
+                require_https=True,
             )
         mutation = """
             mutation StartArray {
