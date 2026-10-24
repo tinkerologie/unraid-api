@@ -89,6 +89,9 @@ async with UnraidClient(host, api_key) as client:
 
 ```python
 async with UnraidClient(host, api_key) as client:
+    # Unlock encrypted disks (optional; keyfile contents also supported)
+    await client.start_array(decryption_password=password)
+
     # Start/stop array
     await client.start_array()
     await client.stop_array()
@@ -194,6 +197,7 @@ async with UnraidClient(host, api_key) as client:
 |--------|-------------|
 | `test_connection()` | Test if server is reachable |
 | `get_version()` | Get Unraid and API version |
+| `supports_standby_safe_temperature_metrics(version=None)` | `True` for API >= 4.37.6; unknown versions fail closed |
 | `get_server_info()` | Get server info for device registration |
 | `query(query, variables)` | Execute GraphQL query |
 | `mutate(mutation, variables)` | Execute GraphQL mutation |
@@ -229,6 +233,39 @@ async with UnraidClient(host, api_key) as client:
 | `get_temperature_metrics()` | `TemperatureMetrics` | Temperature sensors, thresholds, summary |
 | `get_network_metrics()` | `list[NetworkMetrics]` | Per-interface network throughput, packet, error counters (API 4.35.0+) |
 
+#### Standby-safe temperature metrics
+
+Unraid API >= 4.37.6 respects disk standby when reading `metrics.temperature`
+or streaming `systemMetricsTemperature`. Earlier APIs wake sleeping disks.
+At setup, call `check_compatibility()` (or `get_version()`) once and pass the
+result to `supports_standby_safe_temperature_metrics(version)`. For `ha-unraid`
+and other consumers, a `True` result allows polling `get_system_metrics()` and
+enabling temperature sensors. Otherwise use `get_system_metrics_safe()`.
+
+```python
+version = await client.check_compatibility()
+if await client.supports_standby_safe_temperature_metrics(version):
+    metrics = await client.get_system_metrics()
+else:
+    metrics = await client.get_system_metrics_safe()
+```
+
+The helper compares only the API version, fails closed on unknown versions and
+does not cache. Recheck the version after reconnecting or upgrading the API plugin.
+Continue to avoid polling `get_physical_disks()`, even with `include_smart=False`:
+that query still wakes disks on 4.37.6 pending
+[unraid/api#2105](https://github.com/unraid/api/issues/2105). Use `get_array_disks()`.
+
+`restart_container()` returns raw `docker.restart` data on the native path or
+`docker.start` data on the fallback path. Its `delay` argument applies only to
+the fallback. If introspection fails, permissive capabilities optimistically
+attempt native restart. `typed_get_vms()` requests `uuid` only when supported.
+
+Plugin and language installs modify the server. Follow their returned operation
+with `subscribe_plugin_install_updates(operation.id)`. `remove_array_disk()`
+emits `DeprecationWarning` and rejects servers without the retired mutation;
+use the Unraid Core storage workflow instead.
+
 #### Raw Data Methods
 
 | Method | Returns | Description |
@@ -253,14 +290,17 @@ async with UnraidClient(host, api_key) as client:
 |--------|-------------|
 | `start_container(id)` | Start Docker container |
 | `stop_container(id)` | Stop Docker container |
-| `restart_container(id)` | Restart Docker container |
+| `restart_container(id)` | Native Docker restart when supported; stop/wait/start fallback on older servers |
 | `start_vm(id)` | Start VM |
 | `stop_vm(id)` | Stop VM (graceful) |
 | `force_stop_vm(id)` | Force stop VM |
 | `pause_vm(id)` | Pause VM |
 | `resume_vm(id)` | Resume paused VM |
-| `start_array()` | Start disk array |
+| `start_array(decryption_password=..., decryption_keyfile=...)` | Start disk array; optional password or keyfile contents (data URL/base64, not a path) |
 | `stop_array()` | Stop disk array |
+| `remove_array_disk(id)` | Deprecated: direct removal was retired upstream; use Unraid Core storage workflows |
+| `install_plugin(url, name=..., forced=...)` | Install plugin software; returns `PluginInstallOperation` |
+| `install_language(url, name=..., forced=...)` | Install software from a language-pack URL, not a language code; returns `PluginInstallOperation` |
 | `start_parity_check(correct)` | Start parity check |
 | `pause_parity_check()` | Pause parity check |
 | `resume_parity_check()` | Resume parity check |
@@ -309,7 +349,7 @@ async with UnraidClient(host, api_key) as client:
 #### Docker/VM Models
 - `DockerContainer` - Container with ports, state, mounts, Tailscale, template ports
 - `DockerNetwork` - Docker network configuration
-- `VmDomain` - Virtual machine (id, name, state)
+- `VmDomain` - Virtual machine (id, name, state, optional uuid)
 - `TailscaleStatus` - Tailscale hostname, DNS name, and online status
 - `ContainerTemplatePort` - Template port configuration
 - `ContainerUpdateStatus` - Container update availability

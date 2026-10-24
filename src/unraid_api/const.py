@@ -7,6 +7,8 @@ from __future__ import annotations
 # =============================================================================
 
 MIN_API_VERSION = "4.31.1"
+# Feature threshold, not a compatibility minimum: https://github.com/unraid/api/pull/2091
+MIN_STANDBY_SAFE_TEMPERATURE_API_VERSION = "4.37.6"
 MIN_UNRAID_VERSION = "7.2.4"
 
 # =============================================================================

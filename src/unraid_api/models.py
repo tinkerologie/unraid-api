@@ -1160,6 +1160,7 @@ class VmDomain(UnraidBaseModel):
     id: str
     name: str
     state: str | None = None
+    uuid: str | None = None
 
     @property
     def is_running(self) -> bool:

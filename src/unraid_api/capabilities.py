@@ -30,6 +30,8 @@ CAPABILITY_TYPES: tuple[str, ...] = (
     "ResolvedOrganizerV1",
     "Server",
     "PluginInstallOperation",
+    "UnraidPluginsMutations",
+    "VmDomain",
 )
 
 

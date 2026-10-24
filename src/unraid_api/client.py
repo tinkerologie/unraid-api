@@ -722,6 +722,21 @@ class UnraidClient:
                     len(errors),
                     "; ".join(error_messages),
                 )
+                for err in errors:
+                    if not isinstance(err, dict):
+                        continue
+                    extensions = err.get("extensions")
+                    if not isinstance(extensions, dict):
+                        continue
+                    code = extensions.get("code")
+                    if isinstance(code, str) and code.upper() in {
+                        "FORBIDDEN",
+                        "UNAUTHORIZED",
+                    }:
+                        raise UnraidAuthenticationError(
+                            f"GraphQL authorization failed ({code.upper()}): "
+                            + "; ".join(error_messages)
+                        )
                 raise UnraidAPIError(
                     "GraphQL query failed",
                     errors=errors,
@@ -1089,6 +1104,32 @@ class UnraidClient:
 
         return version_info
 
+    async def supports_standby_safe_temperature_metrics(
+        self, version: VersionInfo | None = None
+    ) -> bool:
+        """Check whether the API version provides standby-safe temperature reads.
+
+        Compare only the API version; unknown or invalid versions return False.
+        A True result covers metrics.temperature queries and the
+        systemMetricsTemperature subscription, but not get_physical_disks().
+        Pass the VersionInfo from check_compatibility() to avoid another request.
+        Otherwise get_version() is called without caching; request errors propagate.
+        """
+        from packaging.version import InvalidVersion, Version
+
+        from unraid_api.const import MIN_STANDBY_SAFE_TEMPERATURE_API_VERSION
+
+        if version is None:
+            version = await self.get_version()
+        try:
+            return bool(
+                Version(version.api)
+                >= Version(MIN_STANDBY_SAFE_TEMPERATURE_API_VERSION)
+            )
+        except InvalidVersion:
+            _LOGGER.warning("Could not parse API version: %s", version.api)
+            return False
+
     async def get_version(self) -> VersionInfo:
         """Get Unraid server version information.
 
@@ -1151,6 +1192,10 @@ class UnraidClient:
         Returns CPU, memory, swap, and uptime metrics for Home Assistant
         sensor entities. This is called every 30 seconds by the HA integration.
 
+        Before API 4.37.6 the temperature block wakes standby disks. On API
+        >= 4.37.6 it respects standby and is safe for routine polling. Check
+        supports_standby_safe_temperature_metrics() before selecting this method.
+
         Returns:
             SystemMetrics model with all metrics data.
 
@@ -1197,10 +1242,10 @@ class UnraidClient:
         """Get system metrics WITHOUT temperature sensors.
 
         Identical to get_system_metrics() but omits the temperature block
-        from the GraphQL query. The Unraid GraphQL temperature resolver
-        triggers smartctl reads for disk sensors which wakes sleeping/standby
-        disks. Use this method for frequent polling (e.g. every 30 seconds)
-        to avoid disrupting disk power management.
+        from the GraphQL query. Use this method when
+        supports_standby_safe_temperature_metrics() returns False. Before API
+        4.37.6 the temperature resolver wakes standby disks. On API >= 4.37.6,
+        get_system_metrics() includes temperatures without waking disks.
 
         CPU temperature is still available via info.cpu.packages.temp.
         Temperature will be None in the returned SystemMetrics.
@@ -1235,6 +1280,9 @@ class UnraidClient:
 
         Returns temperature data from lm_sensors, smartctl, and IPMI
         providers including per-sensor readings, thresholds, and summary.
+
+        Before API 4.37.6 this wakes standby disks. API >= 4.37.6 respects
+        disk standby; check supports_standby_safe_temperature_metrics().
 
         Returns:
             TemperatureMetrics model with summary and sensor data.
@@ -1523,6 +1571,8 @@ class UnraidClient:
         """
         from unraid_api.models import VmDomain
 
+        caps = await self.get_capabilities()
+        uuid_field = "uuid" if caps.has("VmDomain.uuid") else ""
         query_str = """
             query {
                 vms {
@@ -1534,7 +1584,7 @@ class UnraidClient:
                 }
             }
         """
-        result = await self.query(query_str)
+        result = await self.query(query_str.replace("state", f"state {uuid_field}"))
         domains = result.get("vms", {}).get("domains", []) or []
         return [VmDomain(**vm) for vm in domains]
 
@@ -1911,15 +1961,42 @@ class UnraidClient:
     # Array Control Methods
     # =========================================================================
 
-    async def start_array(self) -> dict[str, Any]:
+    async def start_array(
+        self,
+        *,
+        decryption_password: str | None = None,
+        decryption_keyfile: str | None = None,
+    ) -> dict[str, Any]:
         """Start the Unraid array.
 
         WARNING: This is a potentially destructive operation.
+
+        Args:
+            decryption_password: Optional password to unlock encrypted disks.
+            decryption_keyfile: Keyfile contents as a data URL or raw base64
+                string, not a filesystem path.
+
+        Servers without these input fields return a GraphQL error. Decryption
+        values are sent only through variables, never interpolated into queries.
 
         Returns:
             Mutation response data with array state.
 
         """
+        if decryption_password is not None or decryption_keyfile is not None:
+            array_input: dict[str, Any] = {"desiredState": "START"}
+            if decryption_password is not None:
+                array_input["decryptionPassword"] = decryption_password
+            if decryption_keyfile is not None:
+                array_input["decryptionKeyfile"] = decryption_keyfile
+            return await self.mutate(
+                """
+                mutation StartArray($input: ArrayStateInput!) {
+                    array { setState(input: $input) { id state } }
+                }
+                """,
+                {"input": array_input},
+            )
         mutation = """
             mutation StartArray {
                 array {
@@ -2735,6 +2812,10 @@ class UnraidClient:
         self, include_smart: bool = False
     ) -> list[dict[str, Any]]:
         """Get all physical disks.
+
+        This still wakes disks on API 4.37.6 until unraid/api#2105 ships.
+        include_smart=False does not prevent a wake. Use get_array_disks()
+        for routine polling.
 
         WARNING: This query WILL WAKE UP sleeping/standby disks!
         For disk information without waking disks, use get_array_disks() instead.
@@ -3641,6 +3722,10 @@ class UnraidClient:
     ) -> dict[str, Any]:
         """Remove a disk from the array.
 
+        .. deprecated:: 1.14.0
+            Direct removal was retired upstream after v4.36.0 (unraid/api#2068).
+            Use Unraid Core's storage workflow for disk removal instead.
+
         Args:
             disk_id: Disk ID to remove.
             slot: Optional slot number of the disk.
@@ -3649,6 +3734,18 @@ class UnraidClient:
             Mutation response data (UnraidArray).
 
         """
+        warnings.warn(
+            "Direct array disk removal was retired upstream (unraid/api#2068); "
+            "use Unraid Core's storage workflow for disk removal.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        caps = await self.get_capabilities()
+        if not caps.has("ArrayMutations.removeDiskFromArray"):
+            raise UnraidAPIError(
+                "This server no longer supports direct array disk removal; "
+                "use Unraid Core's storage workflow."
+            )
         mutation = """
             mutation RemoveArrayDisk($input: ArrayDiskInput!) {
                 array {
@@ -3690,23 +3787,33 @@ class UnraidClient:
     async def restart_container(
         self, container_id: str, *, delay: float = 1.0
     ) -> dict[str, Any]:
-        """Restart a Docker container (stop → wait → start).
+        """Restart a Docker container with the native mutation when available.
 
-        The Unraid GraphQL API does not have a native restart mutation,
-        so this convenience method encapsulates the stop/wait/start sequence.
+        Otherwise stop, wait and start. Permissive capabilities optimistically
+        select the native mutation when introspection is unavailable.
 
         Args:
             container_id: Container ID to restart.
-            delay: Seconds to wait between stop and start (default 1.0).
+            delay: Seconds between stop and start on the fallback path only.
 
         Returns:
-            Start mutation response data.
+            Raw data: docker.restart for native restart, docker.start for fallback.
 
         Raises:
             UnraidConnectionError: On network errors.
             UnraidAPIError: On GraphQL errors.
 
         """
+        caps = await self.get_capabilities()
+        if caps.has("DockerMutations.restart"):
+            return await self.mutate(
+                """
+                mutation RestartContainer($id: PrefixedID!) {
+                    docker { restart(id: $id) { id state status } }
+                }
+                """,
+                {"id": container_id},
+            )
         await self.stop_container(container_id)
         await asyncio.sleep(delay)
         return await self.start_container(container_id)
@@ -4112,6 +4219,10 @@ class UnraidClient:
 
         Yields TemperatureMetrics models with summary and sensor data
         for all detected temperature sensors.
+
+        Uses the same server-side collector as metrics.temperature: before
+        API 4.37.6 this wakes standby disks; API >= 4.37.6 respects standby.
+        Check supports_standby_safe_temperature_metrics() before subscribing.
 
         Yields:
             TemperatureMetrics for each update event.
@@ -5372,6 +5483,62 @@ class UnraidClient:
         """
         result = await self.query(query_str)
         return result.get("installedUnraidPlugins") or []
+
+    async def install_plugin(
+        self, url: str, *, name: str | None = None, forced: bool | None = None
+    ) -> PluginInstallOperation:
+        """Install software from a plugin URL and return its background operation.
+
+        WARNING: This installs software on the server. Follow progress with
+        subscribe_plugin_install_updates(operation.id). Optional name and forced
+        values are forwarded to the server only when supplied.
+        """
+        return await self._install_plugin_operation("installPlugin", url, name, forced)
+
+    async def install_language(
+        self, url: str, *, name: str | None = None, forced: bool | None = None
+    ) -> PluginInstallOperation:
+        """Install software from a language-pack URL, not a language code.
+
+        WARNING: This installs software on the server. Follow progress with
+        subscribe_plugin_install_updates(operation.id). Optional name and forced
+        values are forwarded to the server only when supplied.
+        """
+        return await self._install_plugin_operation(
+            "installLanguage", url, name, forced
+        )
+
+    async def _install_plugin_operation(
+        self, field: str, url: str, name: str | None, forced: bool | None
+    ) -> PluginInstallOperation:
+        """Submit a plugin or language install and parse the background operation."""
+        from unraid_api.models import PluginInstallOperation
+
+        await self.get_capabilities()
+        self._require_capability(
+            "Plugin installation", f"UnraidPluginsMutations.{field}"
+        )
+        install_input: dict[str, Any] = {"url": url}
+        if name is not None:
+            install_input["name"] = name
+        if forced is not None:
+            install_input["forced"] = forced
+        mutation = """
+            mutation ($input: InstallPluginInput!) {
+                unraidPlugins {
+                    installPlugin(input: $input) {
+                        id name url status output createdAt updatedAt finishedAt
+                    }
+                }
+            }
+        """
+        result = await self.mutate(
+            mutation.replace("installPlugin", field), {"input": install_input}
+        )
+        operation = (result.get("unraidPlugins") or {}).get(field)
+        if not operation:
+            raise UnraidAPIError("Plugin installation returned no operation")
+        return PluginInstallOperation(**operation)
 
     async def get_plugin_install_operations(
         self,
