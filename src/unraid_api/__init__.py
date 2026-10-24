@@ -4,6 +4,7 @@ from unraid_api._version import __version__
 from unraid_api.client import UnraidClient
 from unraid_api.const import (
     MIN_API_VERSION,
+    MIN_STANDBY_SAFE_TEMPERATURE_API_VERSION,
     MIN_UNRAID_VERSION,
 )
 from unraid_api.exceptions import (
@@ -124,6 +125,7 @@ from unraid_api.models import (
 
 __all__ = [
     "MIN_API_VERSION",
+    "MIN_STANDBY_SAFE_TEMPERATURE_API_VERSION",
     "MIN_UNRAID_VERSION",
     "AccessUrl",
     "ApiConfig",

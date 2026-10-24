@@ -1195,12 +1195,14 @@ class TestDockerContainerStatsSanitization:
         # but ``\x1b[J\x1b[H`` is injected before the actual container id.
         corrupted = (
             "341df820ea490:\x1b[J\x1b[H"
+            # pragma: allowlist nextline secret
             "25d9c2630a90520ed9d9f6b2366c3d5a3517f3efd3b5e260823081f0dbdf43cb"
         )
         stats = DockerContainerStats(id=corrupted)
 
         assert stats.id == (
             "341df820ea490:"
+            # pragma: allowlist nextline secret
             "25d9c2630a90520ed9d9f6b2366c3d5a3517f3efd3b5e260823081f0dbdf43cb"
         )
         assert "\x1b" not in stats.id
@@ -3656,13 +3658,16 @@ class TestVmDomainSchemaAlignment:
     """Verify VmDomain only has fields that exist in the GraphQL schema."""
 
     def test_only_schema_fields(self) -> None:
-        """VmDomain should only have id, name, state (per live schema)."""
+        """VmDomain exposes identity, state and the optional upstream UUID."""
         from unraid_api.models import VmDomain
 
         vm = VmDomain(id="vm:1", name="TestVM", state="running")
         assert vm.id == "vm:1"
         assert vm.name == "TestVM"
         assert vm.state == "running"
+        assert set(VmDomain.model_fields) == {"id", "name", "state", "uuid"}
+        assert vm.uuid is None
+        assert VmDomain(id="vm:1", name="Test", uuid="uuid-1").uuid == "uuid-1"
         # These fields were removed as they don't exist in the schema
         assert not hasattr(VmDomain.model_fields, "memory")
         assert "memory" not in VmDomain.model_fields
@@ -4012,7 +4017,7 @@ class TestServerAndProfileModels:
             "remoteurl": "https://remote.myunraid.net",
             "status": "ONLINE",
             "comment": "Main NAS",
-            "apikey": "key-xyz",
+            "apikey": "key-xyz",  # pragma: allowlist secret
             "owner": {
                 "id": "owner:1",
                 "username": "admin",

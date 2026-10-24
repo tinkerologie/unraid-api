@@ -549,7 +549,7 @@ type VmDomain {
   id: PrefixedID!              # UUID
   name: String
   state: VmState!
-  uuid: String @deprecated     # Use id instead
+  uuid: String @deprecated     # Use id instead; selected by typed_get_vms only when present
 }
 ```
 
@@ -1070,7 +1070,30 @@ type ProfileModel {
 
 ### Plugin Background Operations
 
+Both install mutations install software and return a background operation.
+`installLanguage` accepts a language-pack URL, not a language code. Optional
+`name` and `forced` values are passed in `InstallPluginInput` alongside `url`.
+Follow progress with `pluginInstallUpdates(operationId: ...)`.
+
 ```graphql
+# Variables: {"input": {"url": "https://example.test/plugin.plg"}}
+mutation InstallPlugin($input: InstallPluginInput!) {
+  unraidPlugins {
+    installPlugin(input: $input) {
+      id name url status output createdAt updatedAt finishedAt
+    }
+  }
+}
+
+# Variables: {"input": {"url": "https://example.test/language.xml"}}
+mutation InstallLanguage($input: InstallPluginInput!) {
+  unraidPlugins {
+    installLanguage(input: $input) {
+      id name url status output createdAt updatedAt finishedAt
+    }
+  }
+}
+
 type PluginInstallOperation {
   id: ID!
   name: String
@@ -1386,6 +1409,14 @@ mutation {
   }
 }
 
+# Start an encrypted array over certificate-verified HTTPS.
+# Secrets go in variables, never query text.
+# Variables: {"input": {"desiredState": "START", "decryptionPassword": "...",
+#                      "decryptionKeyfile": "<data URL or raw base64 contents>"}}
+mutation StartEncryptedArray($input: ArrayStateInput!) {
+  array { setState(input: $input) { id state } }
+}
+
 # Stop array
 mutation {
   array {
@@ -1400,7 +1431,8 @@ mutation {
   }
 }
 
-# Remove disk from array (array must be stopped)
+# Historical only: removed upstream after v4.36.0 (unraid/api#2068).
+# Use Unraid Core storage workflows; only older schemas support this mutation.
 mutation {
   array {
     removeDiskFromArray(input: { id: "disk:abc" }) { state }
@@ -1440,6 +1472,11 @@ mutation { parityCheck { cancel } }
 ### Docker Mutations
 
 ```graphql
+# Native restart (when DockerMutations.restart is available)
+mutation RestartContainer($id: PrefixedID!) {
+  docker { restart(id: $id) { id state status } }
+}
+
 # Start container
 mutation {
   docker {

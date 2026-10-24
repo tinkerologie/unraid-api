@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-10-24
+
+### Added
+
+- **Python 3.15 support** — Added the Python 3.15 classifier and CI coverage for Python 3.11–3.15, retaining the Python 3.11 minimum ([#130](https://github.com/tinkerologie/unraid-api/issues/130)).
+
+- **Standby-safe temperature detection** — `supports_standby_safe_temperature_metrics()` and exported `MIN_STANDBY_SAFE_TEMPERATURE_API_VERSION` identify API >= 4.37.6 using API versions only, failing closed when unknown ([unraid/api#2091](https://github.com/unraid/api/pull/2091), [#126](https://github.com/tinkerologie/unraid-api/issues/126)).
+- **Encrypted array start** — Optional keyword-only `decryption_password` and `decryption_keyfile` parameters send credentials through GraphQL variables over HTTPS (including redirect enforcement); HTTP destinations and disabled certificate verification are rejected before transmitting decryption values; injected sessions receive an explicit verified TLS context. Unlock requests bypass plaintext discovery and remain bound to the configured HTTPS server and port. Plain array start is unchanged ([#127](https://github.com/tinkerologie/unraid-api/issues/127)).
+- **Plugin and language installation** — `install_plugin()` and `install_language()` accept package URLs with optional `name` and `forced`, returning `PluginInstallOperation` for progress tracking.
+- **VM UUID** — `VmDomain.uuid` is optional; `typed_get_vms()` selects it only when schema introspection confirms support, including its upstream-deprecated field, and omits it when introspection is unavailable.
+
+### Changed
+
+- **Docker restart** — `restart_container()` uses native `docker.restart` when supported, returning raw `docker.restart` data. Older schemas retain stop/wait/start with raw `docker.start` data; `delay` applies only to that fallback. Permissive capabilities optimistically attempt native restart.
+- **GraphQL authorization errors** — Ticket-defined `FORBIDDEN` and `UNAUTHORIZED` codes with empty data now raise `UnraidAuthenticationError`; partial data remains available. A forbidden capability-introspection response propagates without caching permissive capabilities.
+- **Temperature polling guidance** — Docstrings and README explain selecting full metrics on API >= 4.37.6 and safe metrics otherwise. Physical disk enumeration still wakes disks on 4.37.6 pending [unraid/api#2105](https://github.com/unraid/api/issues/2105); use `get_array_disks()` for polling.
+
+### Deprecated
+
+- **Direct array disk removal** — `remove_array_disk()` warns and checks schema capabilities before mutation. Direct removal was retired upstream after v4.36.0 ([unraid/api#2068](https://github.com/unraid/api/pull/2068)); use Unraid Core storage workflows instead.
+
 ## [1.13.2] - 2026-10-18
 
 ### Fixed

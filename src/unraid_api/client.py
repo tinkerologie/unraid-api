@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
 import sys
 import uuid
 import warnings
@@ -23,7 +24,6 @@ from unraid_api.exceptions import (
 )
 
 if TYPE_CHECKING:
-    import ssl
     from collections.abc import AsyncGenerator
     from types import TracebackType
 
@@ -558,11 +558,14 @@ class UnraidClient:
 
         return (None, True)
 
-    async def _make_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _make_request(
+        self, payload: dict[str, Any], *, require_https: bool = False
+    ) -> dict[str, Any]:
         """Make a GraphQL request to the Unraid server.
 
         Args:
             payload: GraphQL query/mutation payload.
+            require_https: Reject unencrypted destinations before sending payloads.
 
         Returns:
             Response data dictionary.
@@ -579,34 +582,62 @@ class UnraidClient:
         if self._session is None:
             raise UnraidConnectionError("Failed to create HTTP session")
 
-        if self._resolved_url is None:
-            redirect_url, use_ssl = await self._discover_redirect_url()
-            if redirect_url:
-                self._resolved_url = redirect_url
-            else:
-                request_host = self._normalize_host_for_request()
-                if use_ssl:
-                    protocol = "https"
-                    port_suffix = (
-                        f":{self.https_port}"
-                        if self.https_port != DEFAULT_HTTPS_PORT
-                        else ""
-                    )
+        if require_https:
+            # Unlock requests use only the configured authority, without HTTP discovery
+            # or shared URL cache changes that could affect ordinary requests.
+            configured = urlparse(f"https://{self._normalize_host_for_request()}")
+            hostname = configured.hostname
+            if hostname is None:
+                raise UnraidConnectionError("Invalid configured HTTPS hostname")
+            if ":" in hostname:
+                hostname = f"[{hostname}]"
+            port = configured.port or self.https_port
+            port_suffix = f":{port}" if port != DEFAULT_HTTPS_PORT else ""
+            url = f"https://{hostname}{port_suffix}/graphql"
+        else:
+            if self._resolved_url is None:
+                redirect_url, use_ssl = await self._discover_redirect_url()
+                if redirect_url:
+                    self._resolved_url = redirect_url
                 else:
-                    protocol = "http"
-                    port_suffix = (
-                        f":{self.http_port}"
-                        if self.http_port != DEFAULT_HTTP_PORT
-                        else ""
+                    request_host = self._normalize_host_for_request()
+                    if use_ssl:
+                        protocol = "https"
+                        port_suffix = (
+                            f":{self.https_port}"
+                            if self.https_port != DEFAULT_HTTPS_PORT
+                            else ""
+                        )
+                    else:
+                        protocol = "http"
+                        port_suffix = (
+                            f":{self.http_port}"
+                            if self.http_port != DEFAULT_HTTP_PORT
+                            else ""
+                        )
+                    self._resolved_url = (
+                        f"{protocol}://{request_host}{port_suffix}/graphql"
                     )
-                self._resolved_url = f"{protocol}://{request_host}{port_suffix}/graphql"
-            _LOGGER.debug("Using URL: %s", self._sanitize_url(self._resolved_url))
+                _LOGGER.debug("Using URL: %s", self._sanitize_url(self._resolved_url))
 
-        url = self._resolved_url
+            url = self._resolved_url
+        request_options: dict[str, Any] = {}
+        if require_https:
+            if not self.verify_ssl:
+                raise UnraidSSLError(
+                    "Array decryption requires an HTTPS connection with "
+                    "certificate verification enabled"
+                )
+            # Explicit context also protects callers injecting an unverified session.
+            request_options["ssl"] = await asyncio.to_thread(ssl.create_default_context)
 
         try:
             async with self._session.post(
-                url, json=payload, headers=self._auth_headers, allow_redirects=False
+                url,
+                json=payload,
+                headers=self._auth_headers,
+                allow_redirects=False,
+                **request_options,
             ) as response:
                 # Follow redirects if needed
                 if response.status in (301, 302, 307, 308):
@@ -628,12 +659,24 @@ class UnraidClient:
                                 f"Redirect to untrusted host rejected: "
                                 f"{self._sanitize_url(redirect_url)}"
                             )
-                        self._resolved_url = redirect_url
+                        if require_https and (
+                            parsed_redirect.scheme != "https"
+                            or parsed_redirect.hostname != parsed_original.hostname
+                            or (parsed_redirect.port or DEFAULT_HTTPS_PORT)
+                            != (parsed_original.port or DEFAULT_HTTPS_PORT)
+                        ):
+                            raise UnraidSSLError(
+                                "Array decryption requires an HTTPS connection "
+                                "to the configured server and port"
+                            )
+                        if not require_https:
+                            self._resolved_url = redirect_url
                         async with self._session.post(
                             redirect_url,
                             json=payload,
                             headers=self._auth_headers,
                             allow_redirects=False,
+                            **request_options,
                         ) as redirect_response:
                             redirect_response.raise_for_status()
                             result: dict[str, Any] = await redirect_response.json()
@@ -687,11 +730,24 @@ class UnraidClient:
             UnraidAuthenticationError: On authentication failures.
 
         """
+        return await self._execute_query(query, variables)
+
+    async def _execute_query(
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+        *,
+        require_https: bool = False,
+    ) -> dict[str, Any]:
+        """Execute and classify a response, optionally requiring encrypted transport."""
         payload: dict[str, Any] = {"query": query}
         if variables:
             payload["variables"] = variables
 
-        response = await self._make_request(payload)
+        if require_https:
+            response = await self._make_request(payload, require_https=True)
+        else:
+            response = await self._make_request(payload)
         data = response.get("data", {})
 
         if "errors" in response:
@@ -722,6 +778,21 @@ class UnraidClient:
                     len(errors),
                     "; ".join(error_messages),
                 )
+                for err in errors:
+                    if not isinstance(err, dict):
+                        continue
+                    extensions = err.get("extensions")
+                    if not isinstance(extensions, dict):
+                        continue
+                    code = extensions.get("code")
+                    if isinstance(code, str) and code.upper() in {
+                        "FORBIDDEN",
+                        "UNAUTHORIZED",
+                    }:
+                        raise UnraidAuthenticationError(
+                            f"GraphQL authorization failed ({code.upper()}): "
+                            + "; ".join(error_messages)
+                        )
                 raise UnraidAPIError(
                     "GraphQL query failed",
                     errors=errors,
@@ -1089,6 +1160,32 @@ class UnraidClient:
 
         return version_info
 
+    async def supports_standby_safe_temperature_metrics(
+        self, version: VersionInfo | None = None
+    ) -> bool:
+        """Check whether the API version provides standby-safe temperature reads.
+
+        Compare only the API version; unknown or invalid versions return False.
+        A True result covers metrics.temperature queries and the
+        systemMetricsTemperature subscription, but not get_physical_disks().
+        Pass the VersionInfo from check_compatibility() to avoid another request.
+        Otherwise get_version() is called without caching; request errors propagate.
+        """
+        from packaging.version import InvalidVersion, Version
+
+        from unraid_api.const import MIN_STANDBY_SAFE_TEMPERATURE_API_VERSION
+
+        if version is None:
+            version = await self.get_version()
+        try:
+            return bool(
+                Version(version.api)
+                >= Version(MIN_STANDBY_SAFE_TEMPERATURE_API_VERSION)
+            )
+        except InvalidVersion:
+            _LOGGER.warning("Could not parse API version: %s", version.api)
+            return False
+
     async def get_version(self) -> VersionInfo:
         """Get Unraid server version information.
 
@@ -1151,6 +1248,10 @@ class UnraidClient:
         Returns CPU, memory, swap, and uptime metrics for Home Assistant
         sensor entities. This is called every 30 seconds by the HA integration.
 
+        Before API 4.37.6 the temperature block wakes standby disks. On API
+        >= 4.37.6 it respects standby and is safe for routine polling. Check
+        supports_standby_safe_temperature_metrics() before selecting this method.
+
         Returns:
             SystemMetrics model with all metrics data.
 
@@ -1197,10 +1298,10 @@ class UnraidClient:
         """Get system metrics WITHOUT temperature sensors.
 
         Identical to get_system_metrics() but omits the temperature block
-        from the GraphQL query. The Unraid GraphQL temperature resolver
-        triggers smartctl reads for disk sensors which wakes sleeping/standby
-        disks. Use this method for frequent polling (e.g. every 30 seconds)
-        to avoid disrupting disk power management.
+        from the GraphQL query. Use this method when
+        supports_standby_safe_temperature_metrics() returns False. Before API
+        4.37.6 the temperature resolver wakes standby disks. On API >= 4.37.6,
+        get_system_metrics() includes temperatures without waking disks.
 
         CPU temperature is still available via info.cpu.packages.temp.
         Temperature will be None in the returned SystemMetrics.
@@ -1235,6 +1336,9 @@ class UnraidClient:
 
         Returns temperature data from lm_sensors, smartctl, and IPMI
         providers including per-sensor readings, thresholds, and summary.
+
+        Before API 4.37.6 this wakes standby disks. API >= 4.37.6 respects
+        disk standby; check supports_standby_safe_temperature_metrics().
 
         Returns:
             TemperatureMetrics model with summary and sensor data.
@@ -1523,16 +1627,21 @@ class UnraidClient:
         """
         from unraid_api.models import VmDomain
 
-        query_str = """
-            query {
-                vms {
-                    domains {
+        caps = await self.get_capabilities()
+        uuid_field = (
+            "uuid" if not caps.is_permissive and caps.has("VmDomain.uuid") else ""
+        )
+        query_str = f"""
+            query {{
+                vms {{
+                    domains {{
                         id
                         name
                         state
-                    }
-                }
-            }
+                        {uuid_field}
+                    }}
+                }}
+            }}
         """
         result = await self.query(query_str)
         domains = result.get("vms", {}).get("domains", []) or []
@@ -1911,15 +2020,51 @@ class UnraidClient:
     # Array Control Methods
     # =========================================================================
 
-    async def start_array(self) -> dict[str, Any]:
+    async def start_array(
+        self,
+        *,
+        decryption_password: str | None = None,
+        decryption_keyfile: str | None = None,
+    ) -> dict[str, Any]:
         """Start the Unraid array.
 
         WARNING: This is a potentially destructive operation.
+
+        Args:
+            decryption_password: Optional password to unlock encrypted disks.
+            decryption_keyfile: Keyfile contents as a data URL or raw base64
+                string, not a filesystem path.
+
+        Servers without these input fields return a GraphQL error. Decryption
+        values are sent only through variables, never interpolated into queries.
+        Decryption values require HTTPS, including redirects; HTTP-only servers
+        raise UnraidSSLError before those values are sent.
+        Certificate verification must be enabled. Encrypted starts use system
+        trust roots (including SSL_CERT_FILE/SSL_CERT_DIR), even with an injected
+        session; configure those roots to trust a private server certificate.
+        Configure the canonical HTTPS hostname and port: encrypted starts bypass
+        HTTP discovery, ignore cached destinations and reject redirects to other
+        servers.
 
         Returns:
             Mutation response data with array state.
 
         """
+        if decryption_password is not None or decryption_keyfile is not None:
+            array_input: dict[str, Any] = {"desiredState": "START"}
+            if decryption_password is not None:
+                array_input["decryptionPassword"] = decryption_password
+            if decryption_keyfile is not None:
+                array_input["decryptionKeyfile"] = decryption_keyfile
+            return await self._execute_query(
+                """
+                mutation StartArray($input: ArrayStateInput!) {
+                    array { setState(input: $input) { id state } }
+                }
+                """,
+                {"input": array_input},
+                require_https=True,
+            )
         mutation = """
             mutation StartArray {
                 array {
@@ -2735,6 +2880,10 @@ class UnraidClient:
         self, include_smart: bool = False
     ) -> list[dict[str, Any]]:
         """Get all physical disks.
+
+        This still wakes disks on API 4.37.6 until unraid/api#2105 ships.
+        include_smart=False does not prevent a wake. Use get_array_disks()
+        for routine polling.
 
         WARNING: This query WILL WAKE UP sleeping/standby disks!
         For disk information without waking disks, use get_array_disks() instead.
@@ -3641,6 +3790,10 @@ class UnraidClient:
     ) -> dict[str, Any]:
         """Remove a disk from the array.
 
+        .. deprecated:: 1.14.0
+            Direct removal was retired upstream after v4.36.0 (unraid/api#2068).
+            Use Unraid Core's storage workflow for disk removal instead.
+
         Args:
             disk_id: Disk ID to remove.
             slot: Optional slot number of the disk.
@@ -3649,6 +3802,18 @@ class UnraidClient:
             Mutation response data (UnraidArray).
 
         """
+        warnings.warn(
+            "Direct array disk removal was retired upstream (unraid/api#2068); "
+            "use Unraid Core's storage workflow for disk removal.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        caps = await self.get_capabilities()
+        if not caps.has("ArrayMutations.removeDiskFromArray"):
+            raise UnraidAPIError(
+                "This server no longer supports direct array disk removal; "
+                "use Unraid Core's storage workflow."
+            )
         mutation = """
             mutation RemoveArrayDisk($input: ArrayDiskInput!) {
                 array {
@@ -3690,23 +3855,33 @@ class UnraidClient:
     async def restart_container(
         self, container_id: str, *, delay: float = 1.0
     ) -> dict[str, Any]:
-        """Restart a Docker container (stop → wait → start).
+        """Restart a Docker container with the native mutation when available.
 
-        The Unraid GraphQL API does not have a native restart mutation,
-        so this convenience method encapsulates the stop/wait/start sequence.
+        Otherwise stop, wait and start. Permissive capabilities optimistically
+        select the native mutation when introspection is unavailable.
 
         Args:
             container_id: Container ID to restart.
-            delay: Seconds to wait between stop and start (default 1.0).
+            delay: Seconds between stop and start on the fallback path only.
 
         Returns:
-            Start mutation response data.
+            Raw data: docker.restart for native restart, docker.start for fallback.
 
         Raises:
             UnraidConnectionError: On network errors.
             UnraidAPIError: On GraphQL errors.
 
         """
+        caps = await self.get_capabilities()
+        if caps.has("DockerMutations.restart"):
+            return await self.mutate(
+                """
+                mutation RestartContainer($id: PrefixedID!) {
+                    docker { restart(id: $id) { id state status } }
+                }
+                """,
+                {"id": container_id},
+            )
         await self.stop_container(container_id)
         await asyncio.sleep(delay)
         return await self.start_container(container_id)
@@ -4112,6 +4287,10 @@ class UnraidClient:
 
         Yields TemperatureMetrics models with summary and sensor data
         for all detected temperature sensors.
+
+        Uses the same server-side collector as metrics.temperature: before
+        API 4.37.6 this wakes standby disks; API >= 4.37.6 respects standby.
+        Check supports_standby_safe_temperature_metrics() before subscribing.
 
         Yields:
             TemperatureMetrics for each update event.
@@ -5372,6 +5551,62 @@ class UnraidClient:
         """
         result = await self.query(query_str)
         return result.get("installedUnraidPlugins") or []
+
+    async def install_plugin(
+        self, url: str, *, name: str | None = None, forced: bool | None = None
+    ) -> PluginInstallOperation:
+        """Install software from a plugin URL and return its background operation.
+
+        WARNING: This installs software on the server. Follow progress with
+        subscribe_plugin_install_updates(operation.id). Optional name and forced
+        values are forwarded to the server only when supplied.
+        """
+        return await self._install_plugin_operation("installPlugin", url, name, forced)
+
+    async def install_language(
+        self, url: str, *, name: str | None = None, forced: bool | None = None
+    ) -> PluginInstallOperation:
+        """Install software from a language-pack URL, not a language code.
+
+        WARNING: This installs software on the server. Follow progress with
+        subscribe_plugin_install_updates(operation.id). Optional name and forced
+        values are forwarded to the server only when supplied.
+        """
+        return await self._install_plugin_operation(
+            "installLanguage", url, name, forced
+        )
+
+    async def _install_plugin_operation(
+        self, field: str, url: str, name: str | None, forced: bool | None
+    ) -> PluginInstallOperation:
+        """Submit a plugin or language install and parse the background operation."""
+        from unraid_api.models import PluginInstallOperation
+
+        await self.get_capabilities()
+        self._require_capability(
+            "Plugin installation", f"UnraidPluginsMutations.{field}"
+        )
+        install_input: dict[str, Any] = {"url": url}
+        if name is not None:
+            install_input["name"] = name
+        if forced is not None:
+            install_input["forced"] = forced
+        mutation = """
+            mutation ($input: InstallPluginInput!) {
+                unraidPlugins {
+                    installPlugin(input: $input) {
+                        id name url status output createdAt updatedAt finishedAt
+                    }
+                }
+            }
+        """
+        result = await self.mutate(
+            mutation.replace("installPlugin", field), {"input": install_input}
+        )
+        operation = (result.get("unraidPlugins") or {}).get(field)
+        if not operation:
+            raise UnraidAPIError("Plugin installation returned no operation")
+        return PluginInstallOperation(**operation)
 
     async def get_plugin_install_operations(
         self,
