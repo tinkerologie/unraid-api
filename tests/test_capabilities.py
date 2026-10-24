@@ -180,3 +180,18 @@ def test_install_and_vm_capability_types() -> None:
     for name in ("UnraidPluginsMutations", "VmDomain"):
         assert name in CAPABILITY_TYPES
         assert f'{name}: __type(name: "{name}")' in query
+
+
+def test_vm_uuid_introspection_includes_deprecated_fields() -> None:
+    """UUID stays discoverable without changing other capability gates."""
+    from unraid_api.capabilities import build_introspection_query
+
+    query = build_introspection_query()
+    assert (
+        'VmDomain: __type(name: "VmDomain") { name fields(includeDeprecated: true)'
+        in query
+    )
+    assert (
+        'DockerMutations: __type(name: "DockerMutations") { name fields { name } }'
+        in query
+    )

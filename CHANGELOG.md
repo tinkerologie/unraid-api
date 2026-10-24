@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Standby-safe temperature detection** — `supports_standby_safe_temperature_metrics()` and exported `MIN_STANDBY_SAFE_TEMPERATURE_API_VERSION` identify API >= 4.37.6 using API versions only, failing closed when unknown ([unraid/api#2091](https://github.com/unraid/api/pull/2091), [#126](https://github.com/tinkerologie/unraid-api/issues/126)).
 - **Encrypted array start** — Optional keyword-only `decryption_password` and `decryption_keyfile` parameters send credentials through GraphQL variables over HTTPS (including redirect enforcement); HTTP destinations and disabled certificate verification are rejected before transmitting decryption values; injected sessions receive an explicit verified TLS context. Unlock requests bypass plaintext discovery and remain bound to the configured HTTPS server and port. Plain array start is unchanged ([#127](https://github.com/tinkerologie/unraid-api/issues/127)).
 - **Plugin and language installation** — `install_plugin()` and `install_language()` accept package URLs with optional `name` and `forced`, returning `PluginInstallOperation` for progress tracking.
-- **VM UUID** — `VmDomain.uuid` is optional; `typed_get_vms()` selects it only when schema introspection confirms support, omitting it when introspection is unavailable.
+- **VM UUID** — `VmDomain.uuid` is optional; `typed_get_vms()` selects it only when schema introspection confirms support, including its upstream-deprecated field, and omits it when introspection is unavailable.
 
 ### Changed
 

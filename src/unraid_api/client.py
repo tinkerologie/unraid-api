@@ -1631,18 +1631,19 @@ class UnraidClient:
         uuid_field = (
             "uuid" if not caps.is_permissive and caps.has("VmDomain.uuid") else ""
         )
-        query_str = """
-            query {
-                vms {
-                    domains {
+        query_str = f"""
+            query {{
+                vms {{
+                    domains {{
                         id
                         name
                         state
-                    }
-                }
-            }
+                        {uuid_field}
+                    }}
+                }}
+            }}
         """
-        result = await self.query(query_str.replace("state", f"state {uuid_field}"))
+        result = await self.query(query_str)
         domains = result.get("vms", {}).get("domains", []) or []
         return [VmDomain(**vm) for vm in domains]
 

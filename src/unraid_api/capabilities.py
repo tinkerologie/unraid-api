@@ -37,11 +37,15 @@ CAPABILITY_TYPES: tuple[str, ...] = (
 
 def build_introspection_query() -> str:
     """Single aliased __type query covering every capability-relevant type."""
-    fragments = "\n".join(
-        f'    {type_name}: __type(name: "{type_name}") {{ name fields {{ name }} }}'
-        for type_name in CAPABILITY_TYPES
-    )
-    return "query ServerCapabilities {\n" + fragments + "\n        }"
+    fragments = []
+    for type_name in CAPABILITY_TYPES:
+        # uuid is deprecated upstream but remains optional public VM identity data.
+        arguments = "(includeDeprecated: true)" if type_name == "VmDomain" else ""
+        fragments.append(
+            f'    {type_name}: __type(name: "{type_name}") '
+            f"{{ name fields{arguments} {{ name }} }}"
+        )
+    return "query ServerCapabilities {\n" + "\n".join(fragments) + "\n        }"
 
 
 class ServerCapabilities:
