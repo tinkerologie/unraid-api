@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Unraid API 4.37.8+ nullable `docker`/`vms` roots** — When the Docker or VM service fails, these servers return `{"docker": null}` with errors ([unraid/api#2123](https://github.com/unraid/api/pull/2123)). `query()` now raises `UnraidAPIError` (carrying the GraphQL errors) when every returned root is null and errors are present, and the container, VM, network, update-status, port-conflict, log and organizer readers no longer fail with `AttributeError`. They never return an empty list for a failed service ([#135](https://github.com/tinkerologie/unraid-api/issues/135)).
+- **Introspection disabled on Unraid API 4.37.8+** — These servers refuse schema introspection with `INTROSPECTION_DISABLED` ([unraid/api#2095](https://github.com/unraid/api/pull/2095), [#2129](https://github.com/unraid/api/pull/2129)). `get_capabilities()` now recognises that code and uses `ServerCapabilities.introspection_disabled()`: every current field, minus `RETIRED_FIELDS` (direct array disk removal). VM UUIDs are requested again, and `remove_array_disk()` refuses without a request. Other introspection failures still fall back to `permissive()` ([#135](https://github.com/tinkerologie/unraid-api/issues/135)).
+- **GraphQL errors on HTTP 4xx** — A 4xx response with a GraphQL `errors` body raises `UnraidAPIError("GraphQL request rejected (HTTP <status>)")` with those errors, so their messages and `extensions.code` are kept instead of a bare "HTTP error 400" ([#135](https://github.com/tinkerologie/unraid-api/issues/135)).
+
 ## [1.14.0] - 2026-10-24
 
 ### Added
