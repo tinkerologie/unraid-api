@@ -690,6 +690,14 @@ class UnraidClient:
                             allow_redirects=False,
                             **request_options,
                         ) as redirect_response:
+                            if (
+                                HTTP_BAD_REQUEST
+                                <= redirect_response.status
+                                < HTTP_SERVER_ERROR
+                            ):
+                                await self._raise_for_graphql_rejection(
+                                    redirect_response
+                                )
                             redirect_response.raise_for_status()
                             result: dict[str, Any] = await redirect_response.json()
                             return result

@@ -110,6 +110,24 @@ async def test_rejected_request_keeps_graphql_errors() -> None:
     assert exc_info.value.errors[0]["extensions"]["code"] == "INTROSPECTION_DISABLED"
 
 
+async def test_rejected_request_after_redirect_keeps_graphql_errors() -> None:
+    """Servers that redirect the POST (SSL modes) keep the code too."""
+    async with aiointercept(mock_external_urls=True) as m:
+        m.get("http://unraid.test/graphql", status=400)
+        m.post(
+            "http://unraid.test/graphql",
+            status=302,
+            headers={"Location": "https://unraid.test/graphql"},
+        )
+        m.post(
+            "https://unraid.test/graphql", status=400, payload=INTROSPECTION_DISABLED
+        )
+        async with UnraidClient("unraid.test", "test-key", verify_ssl=False) as client:
+            caps = await client.get_capabilities()
+    assert not caps.is_permissive
+    assert caps.has("VmDomain.uuid")
+
+
 @pytest.mark.parametrize(
     "body",
     ["not json", '{"message": "no errors key"}', '{"errors": []}', "[1, 2]"],
