@@ -15,7 +15,7 @@ from aiointercept import aiointercept
 
 from unraid_api import UnraidClient
 from unraid_api.capabilities import RETIRED_FIELDS, ServerCapabilities
-from unraid_api.exceptions import UnraidAPIError
+from unraid_api.exceptions import UnraidAPIError, UnraidAuthenticationError
 
 INTROSPECTION_DISABLED = {
     "errors": [
@@ -126,6 +126,26 @@ async def test_rejected_request_after_redirect_keeps_graphql_errors() -> None:
             caps = await client.get_capabilities()
     assert not caps.is_permissive
     assert caps.has("VmDomain.uuid")
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_auth_failure_after_redirect_stays_an_auth_error(status: int) -> None:
+    """A revoked key is never mistaken for a GraphQL rejection."""
+    async with aiointercept(mock_external_urls=True) as m:
+        m.get("http://unraid.test/graphql", status=400)
+        m.post(
+            "http://unraid.test/graphql",
+            status=302,
+            headers={"Location": "https://unraid.test/graphql"},
+        )
+        m.post(
+            "https://unraid.test/graphql",
+            status=status,
+            payload={"errors": [{"message": "Unauthorized"}]},
+        )
+        async with UnraidClient("unraid.test", "test-key", verify_ssl=False) as client:
+            with pytest.raises(UnraidAuthenticationError):
+                await client.get_capabilities()
 
 
 @pytest.mark.parametrize(

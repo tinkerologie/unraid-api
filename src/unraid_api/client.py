@@ -740,9 +740,11 @@ class UnraidClient:
 
         Unraid API 4.37.8+ rejects some operations before execution, e.g.
         schema introspection with ``extensions.code`` ``INTROSPECTION_DISABLED``.
-        Returns without raising when the body has no GraphQL errors, so the
-        caller's generic HTTP error handling applies.
+        Returns without raising when the body has no GraphQL errors, or for
+        401/403, so the caller's authentication and HTTP error handling applies.
         """
+        if response.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+            return
         try:
             body = await response.json(content_type=None)
         except (aiohttp.ContentTypeError, ValueError):
