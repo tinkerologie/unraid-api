@@ -228,6 +228,102 @@ class TestInventory:
         with pytest.raises(RuntimeError, match="must not perform I/O"):
             st._run_without_loop(asyncio.sleep(0))
 
+    def test_renderer_must_send_a_document(self) -> None:
+        caps = st.ServerCapabilities.permissive()
+        with pytest.raises(RuntimeError, match="sent nothing through query"):
+            st._capture(caps, "query", lambda client: client.get_capabilities())
+
+    def test_install_plugin_and_language_render_separately(self) -> None:
+        schema = st.load_sdl(
+            "type Query { a: Int }\n"
+            "type Mutation { unraidPlugins: UnraidPluginsMutations! }\n"
+            "input InstallPluginInput { url: String! name: String forced: Boolean }\n"
+            "type PluginInstallOperation { id: ID! name: String url: String\n"
+            "  status: String output: [String!] createdAt: String\n"
+            "  updatedAt: String finishedAt: String }\n"
+            "type UnraidPluginsMutations {\n"
+            "  installPlugin(input: InstallPluginInput!): PluginInstallOperation!\n"
+            "}\n"
+        )
+        inventory = st.build_inventory(schema)
+        ops = _ops_from(inventory, "_install_plugin_operation")
+        by_method = {tuple(op.methods): op for op in ops}
+        assert set(by_method) == {("install_plugin",), ("install_language",)}
+        plugin = by_method[("install_plugin",)]
+        language = by_method[("install_language",)]
+        assert "installPlugin(input: $input)" in plugin.document
+        assert "installLanguage(input: $input)" in language.document
+        assert plugin.variants == ["permissive", "schema"]
+        # This schema lacks installLanguage, so that server is never sent it.
+        assert language.variants == ["permissive"]
+        index = st.selected_coordinates(st.load_sdl(_with_language(schema)), inventory)
+        assert index["UnraidPluginsMutations.installLanguage"].methods == {
+            "install_language"
+        }
+        assert index["UnraidPluginsMutations.installPlugin"].methods == {
+            "install_plugin"
+        }
+        # The shared literal is no longer extracted statically for both methods.
+        assert not [
+            op
+            for op in inventory.operations
+            if {"install_plugin", "install_language"} <= set(op.methods)
+        ]
+
+
+def _with_language(schema: GraphQLSchema) -> str:
+    from graphql import print_schema
+
+    return print_schema(schema).replace(
+        "installPlugin(input: InstallPluginInput!): PluginInstallOperation!",
+        "installPlugin(input: InstallPluginInput!): PluginInstallOperation!\n"
+        "  installLanguage(input: InstallPluginInput!): PluginInstallOperation!",
+    )
+
+
+class TestInputUsage:
+    SDL = (
+        "type Query { a: Int }\n"
+        "type Mutation { update(input: ConfigInput!, mode: Mode, n: Int): Boolean }\n"
+        "input ConfigInput { enabled: Boolean sensor: SensorInput self: ConfigInput }\n"
+        "input SensorInput { id: ID unit: Unit }\n"
+        "enum Unit { C F }\n"
+        "enum Mode { A B }\n"
+        "input Unused { x: Int }\n"
+    )
+
+    def test_variable_types_and_nested_inputs_are_tracked(self, tmp_path: Path) -> None:
+        path = _write(
+            tmp_path,
+            "class Client:\n"
+            "    def update(self):\n"
+            '        return """mutation Update(\n'
+            "            $input: ConfigInput!, $mode: [Mode!], $n: Int\n"
+            '        ) { update(input: $input, mode: $mode, n: $n) }"""\n'
+            "    def broken(self):\n"
+            '        return "query {"\n',
+        )
+        inventory = st.build_inventory(root=tmp_path, sources=(path,), registry=())
+        index = st.input_usage(st.load_sdl(self.SDL), inventory)
+        assert set(index) == {"ConfigInput", "SensorInput", "Unit", "Mode"}
+        assert index["Unit"].methods == {"update"}
+        assert index["ConfigInput"].locations == {"lib.py:4"}
+
+    def test_required_input_fields_are_marked(self) -> None:
+        changes = st.diff_schemas(
+            st.load_sdl("type Query { a(i: I): Int } input I { x: Int }"),
+            st.load_sdl(
+                "type Query { a(i: I): Int }\n"
+                "input I { x: Int required: Int! defaulted: Int! = 1 optional: Int }"
+            ),
+        )
+        details = {c.coordinate: c.detail for c in changes}
+        assert details == {
+            "I.required": "required",
+            "I.defaulted": "",
+            "I.optional": "",
+        }
+
 
 class TestValidation:
     def test_validate_operation(self, schema_v4376: GraphQLSchema) -> None:

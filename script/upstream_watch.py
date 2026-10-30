@@ -43,6 +43,7 @@ from schema_tools import (
     build_inventory,
     diff_schemas,
     https_get,
+    input_usage,
     load_sdl,
     merge_selections,
     schema_url,
@@ -63,6 +64,9 @@ STATE_TITLE = "Upstream watch state"
 PER_PAGE = 100
 MAX_PULLS_PER_RELEASE = 30
 BODY_LIMIT = 60000
+# Hidden markers per issue are capped so the visible body always has room;
+# larger groups are split across several issues.
+MARKER_BUDGET = BODY_LIMIT // 2
 TEXT_LIMIT = 300
 REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
 API = "https://api.github.com"
@@ -93,6 +97,10 @@ BEHAVIOUR_RULES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 )
 
 BREAKING_KINDS = frozenset({"field_removed", "field_nullable", "field_type_changed"})
+# Breaking when the input object or enum type is sent in a library variable.
+INPUT_BREAKING_KINDS = frozenset(
+    {"input_field_removed", "input_field_type_changed", "enum_value_removed"}
+)
 ENHANCEMENT_KINDS = frozenset({"type_added", "field_added", "root_field_added"})
 CHANGE_LABELS = {
     "type_added": "type added",
@@ -190,7 +198,9 @@ class Markers:
 def read_markers(fetch: Fetcher, repo: str) -> Markers:
     """Read markers from every bot-authored issue, open or closed.
 
-    Uses the paginated REST listing, never the search API, which lags.
+    Change and group markers come from every such issue; the release and
+    main cursor only from the state issue. Uses the paginated REST listing,
+    never the search API, which lags.
     """
     markers = Markers()
     page = 1
@@ -206,15 +216,18 @@ def read_markers(fetch: Fetcher, repo: str) -> Markers:
                 continue
             number = int(issue["number"])
             body = issue.get("body") or ""
-            for tag in RELEASE_MARKER_RE.findall(body):
-                if markers.release is None or Version(tag[1:]) > Version(
-                    markers.release[1:]
-                ):
-                    markers.release = tag
-            # The state issue is updated in place and holds the last main SHA.
-            main = MAIN_MARKER_RE.search(body)
-            if main and issue.get("title") == STATE_TITLE:
-                markers.main = main.group(1)
+            # The cursor comes only from the state issue, which the report job
+            # updates after every issue is created. Release markers in finding
+            # issues are not a cursor: a run that fails midway must not skip.
+            if issue.get("title") == STATE_TITLE:
+                for tag in RELEASE_MARKER_RE.findall(body):
+                    if markers.release is None or Version(tag[1:]) > Version(
+                        markers.release[1:]
+                    ):
+                        markers.release = tag
+                main = MAIN_MARKER_RE.search(body)
+                if main:
+                    markers.main = main.group(1)
             for change_id in CHANGE_MARKER_RE.findall(body):
                 markers.changes.setdefault(change_id, number)
             for group in GROUP_MARKER_RE.findall(body):
@@ -282,42 +295,57 @@ def release_behaviour(
     fetch: Fetcher, release: Release
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Behaviour notes and linked PRs for one release."""
+    by_pull: dict[int, dict[str, Any]] = {}
     notes: list[dict[str, Any]] = []
     pulls: list[dict[str, Any]] = []
     for number in pull_numbers(release.body):
+        # Only "not found" means the link is not a PR. Rate limits, server and
+        # network errors propagate so the scan fails and nothing advances.
         try:
             pr = fetch_json(fetch, f"{API}/repos/{UPSTREAM_REPO}/pulls/{number}")
-        except FetchError:
+        except NotFoundError:
             continue
         title = str(pr.get("title") or "")
         url = str(pr.get("html_url") or "")
         pulls.append({"number": number, "title": title, "url": url})
         rules = behaviour_matches(f"{title}\n{pr.get('body') or ''}")
         if rules:
-            notes.append(
-                {
-                    "id": f"behaviour:{release.tag}:pr-{number}",
-                    "source": f"unraid/api#{number}",
-                    "title": title,
-                    "url": url,
-                    "rules": rules,
-                }
-            )
+            by_pull[number] = {
+                "id": f"behaviour:{release.tag}:pr-{number}",
+                "source": f"unraid/api#{number}",
+                "title": title,
+                "url": url,
+                "rules": rules,
+            }
+            notes.append(by_pull[number])
     for line in release.body.splitlines():
         text = line.strip(" *-\t")
-        if not text or PULL_RE.search(text):
+        rules = behaviour_matches(text) if text else []
+        if not rules:
             continue
-        rules = behaviour_matches(text)
-        if rules:
-            notes.append(
-                {
-                    "id": f"behaviour:{release.tag}:note-{_short_hash(text)}",
-                    "source": "release notes",
-                    "title": text,
-                    "url": release.url,
-                    "rules": rules,
-                }
-            )
+        linked = pull_numbers(text)
+        existing = next((by_pull[n] for n in linked if n in by_pull), None)
+        if existing is not None:
+            # Same PR already noted: merge the line's rules into that note.
+            existing["rules"] += [r for r in rules if r not in existing["rules"]]
+            continue
+        if linked:
+            note_id = f"behaviour:{release.tag}:pr-{linked[0]}"
+            source = f"unraid/api#{linked[0]}"
+            url = f"https://github.com/{UPSTREAM_REPO}/pull/{linked[0]}"
+        else:
+            note_id = f"behaviour:{release.tag}:note-{_short_hash(text)}"
+            source, url = "release notes", release.url
+        note: dict[str, Any] = {
+            "id": note_id,
+            "source": source,
+            "title": text,
+            "url": url,
+            "rules": rules,
+        }
+        for number in linked:
+            by_pull[number] = note
+        notes.append(note)
     return notes, pulls
 
 
@@ -338,11 +366,22 @@ def _type_selection(type_name: str, selections: SelectionIndex) -> Selection | N
 
 
 def classify(
-    change: SchemaChange, selections: SelectionIndex
+    change: SchemaChange,
+    selections: SelectionIndex,
+    inputs: SelectionIndex | None = None,
 ) -> tuple[str, Selection | None]:
-    """Classify a change as `bug`, `enhancement` or `no_action`."""
+    """Classify a change as `bug`, `enhancement` or `no_action`.
+
+    `inputs` maps input object and enum types the library sends in variables
+    to the methods that send them.
+    """
+    usage = (inputs or {}).get(change.type_name)
+    if change.kind in INPUT_BREAKING_KINDS or (
+        change.kind == "input_field_added" and change.detail == "required"
+    ):
+        return ("bug" if usage else "no_action"), usage
     if change.kind == "type_removed":
-        selection = _type_selection(change.coordinate, selections)
+        selection = _type_selection(change.coordinate, selections) or usage
         return ("bug" if selection else "no_action"), selection
     coordinate = change.field_coordinate
     selection = selections.get(coordinate) if coordinate else None
@@ -383,6 +422,7 @@ class Analysis:
     schema: GraphQLSchema
     inventory: Inventory
     selections: SelectionIndex
+    inputs: SelectionIndex
     failures: set[tuple[str, str]]
 
 
@@ -404,6 +444,7 @@ class SchemaCache:
                     schema,
                     inventory,
                     selected_coordinates(schema, inventory),
+                    input_usage(schema, inventory),
                     {f.key for f in validate_inventory(schema, inventory)},
                 )
         return self._analyses[ref]
@@ -432,8 +473,9 @@ def analyse_step(
         return entry
 
     selections = merge_selections(old.selections, new.selections)
+    inputs = merge_selections(old.inputs, new.inputs)
     for change in diff_schemas(old.schema, new.schema):
-        classification, selection = classify(change, selections)
+        classification, selection = classify(change, selections, inputs)
         entry["changes"].append(_change_entry(change, classification, selection))
 
     # Only operations that validated against the old schema are new breakage.
@@ -512,6 +554,8 @@ def render_issue(
     label: str,
     changes: list[dict[str, Any]],
     notes: list[dict[str, Any]],
+    *,
+    title_suffix: str = "",
 ) -> dict[str, Any]:
     """Render one issue payload for a step's `bug` or `enhancement` group."""
     version = _version_label(entry)
@@ -591,14 +635,65 @@ def render_issue(
     body = "\n".join(lines)
     if len(head) + len(body) > BODY_LIMIT:
         notice = "\n\n_Truncated; see the workflow run summary for the full report._"
-        body = body[: BODY_LIMIT - len(head) - len(notice)] + notice
+        body = body[: max(0, BODY_LIMIT - len(head) - len(notice))] + notice
     return {
         "group": group,
-        "title": title,
+        "title": title + title_suffix,
         "labels": [label, "upstream"],
         "body": head + body,
         "change_ids": ids,
     }
+
+
+def _marker_length(item: dict[str, Any]) -> int:
+    return len(f"<!-- upstream-change: {item['id']} -->\n")
+
+
+def render_issues(
+    entry: dict[str, Any],
+    label: str,
+    changes: list[dict[str, Any]],
+    notes: list[dict[str, Any]],
+    existing_groups: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Render a group's payloads, split so every body stays within BODY_LIMIT.
+
+    A group that fits in one issue keeps the plain `<key>:<label>` group
+    marker. Larger groups are split into parts whose group markers carry a
+    hash of their change IDs, so a retry after a partial run only reopens
+    the parts that were never created.
+    """
+    items = [("change", c) for c in changes] + [("note", n) for n in notes]
+    chunks: list[list[tuple[str, dict[str, Any]]]] = [[]]
+    used = 0
+    for item in items:
+        size = _marker_length(item[1])
+        if chunks[-1] and used + size > MARKER_BUDGET:
+            chunks.append([])
+            used = 0
+        chunks[-1].append(item)
+        used += size
+
+    base = f"{entry['key']}:{label}"
+    if len(chunks) == 1:
+        if base in existing_groups:
+            return []
+        return [render_issue(entry, base, label, changes, notes)]
+    payloads = []
+    for index, chunk in enumerate(chunks, 1):
+        part_changes = [i for kind, i in chunk if kind == "change"]
+        part_notes = [i for kind, i in chunk if kind == "note"]
+        ids = " ".join(i["id"] for _, i in chunk)
+        group = f"{base}:part-{_short_hash(ids)}"
+        if group in existing_groups:
+            continue
+        suffix = f" (part {index} of {len(chunks)})"
+        payloads.append(
+            render_issue(
+                entry, group, label, part_changes, part_notes, title_suffix=suffix
+            )
+        )
+    return payloads
 
 
 def render_summary(report: dict[str, Any]) -> str:
@@ -715,9 +810,10 @@ def scan(
             ("bug", bugs, notes),
             ("enhancement", enhancements, []),
         ):
-            group = f"{entry['key']}:{label}"
-            if (items or group_notes) and group not in markers.groups:
-                issues.append(render_issue(entry, group, label, items, group_notes))
+            if items or group_notes:
+                issues.extend(
+                    render_issues(entry, label, items, group_notes, markers.groups)
+                )
 
     recorded = markers.release
     newest = chain[-1].tag

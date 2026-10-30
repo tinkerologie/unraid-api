@@ -64,6 +64,7 @@ class FakeGitHub:
         self.issues = issues or []
         self.main_sha = main_sha
         self.urls: list[str] = []
+        self.pull_errors: dict[str, Exception] = {}
 
     @staticmethod
     def _page(items: list[Any], url: str) -> bytes:
@@ -83,6 +84,8 @@ class FakeGitHub:
             return json.dumps({"sha": self.main_sha}).encode()
         if url.startswith(f"{api}unraid/api/pulls/"):
             number = url.rsplit("/", 1)[1]
+            if number in self.pull_errors:
+                raise self.pull_errors[number]
             if number in self.pulls:
                 return json.dumps(self.pulls[number]).encode()
         if url.startswith(raw):
@@ -284,18 +287,52 @@ class TestDeduplication:
         assert [u.rsplit("page=", 1)[1] for u in issue_pages] == ["1", "2"]
         assert "search" not in " ".join(github.urls)
 
-    def test_highest_release_marker_wins(self) -> None:
-        issues = [
+    def test_cursor_comes_only_from_the_state_issue(self) -> None:
+        sha = "ab" * 20
+        finding = {
+            "number": 9,
+            "title": "[Bug]: Upstream unraid/api v4.37.9: breaking changes",
+            "body": (
+                "<!-- upstream-group: v4.37.9:bug -->\n"
+                "<!-- upstream-release: v4.37.9 -->\n"
+                f"<!-- upstream-main: {sha} -->\n"
+                "<!-- upstream-change: field_removed:A.b -->"
+            ),
+            "user": {"login": uw.BOT_LOGIN},
+        }
+        states = [
             {
                 "number": n,
-                "title": "x",
+                "title": uw.STATE_TITLE,
                 "body": f"<!-- upstream-release: {tag} -->",
                 "user": {"login": uw.BOT_LOGIN},
             }
-            for n, tag in enumerate(["v4.37.8", "v4.37.10", "v4.37.9"], 1)
+            for n, tag in ((1, "v4.37.7"), (2, "v4.37.6"))
         ]
-        markers = uw.read_markers(FakeGitHub(issues=issues), REPO)
-        assert markers.release == "v4.37.10"
+        markers = uw.read_markers(FakeGitHub(issues=[finding, *states]), REPO)
+        # Finding markers still deduplicate, but never move the cursor.
+        assert markers.release == "v4.37.7"
+        assert markers.main is None
+        assert markers.changes == {"field_removed:A.b": 9}
+        assert markers.groups == {"v4.37.9:bug": 9}
+
+    def test_report_job_failure_before_state_update_does_not_skip(self) -> None:
+        github = FakeGitHub()
+        first = uw.scan(github, REPO, since="v4.37.7", until="v4.37.8")
+        # Simulate a report job that created only the first issue, then died
+        # before recording state: the next default run must still cover it.
+        github.issues = [
+            {
+                "number": 1,
+                "title": first["issues"][0]["title"],
+                "body": first["issues"][0]["body"],
+                "user": {"login": uw.BOT_LOGIN},
+            }
+        ]
+        again = uw.scan(github, REPO)
+        assert again["range"]["recorded_release"] is None
+        assert again["range"]["since"] == "v4.37.8"
+        assert [i["group"] for i in again["issues"]] == ["v4.37.9:bug"]
 
 
 class TestRange:
@@ -431,6 +468,76 @@ class TestSchemaSteps:
         )
 
 
+class TestInputBreakage:
+    OLD = (
+        "type Query { a: Int }\n"
+        "type Mutation {\n"
+        "  updateTemperatureConfig(input: TemperatureConfigInput!): Int\n"
+        "}\n"
+        "input TemperatureConfigInput {\n"
+        "  enabled: Boolean sensor: SensorInput unit: Unit retype: Int\n"
+        "}\n"
+        "input SensorInput { id: ID }\n"
+        "enum Unit { C F }\n"
+        "input Unused { x: Int }\n"
+        "enum Mode { A B }\n"
+    )
+    NEW = (
+        "type Query { a: Int }\n"
+        "type Mutation {\n"
+        "  updateTemperatureConfig(input: TemperatureConfigInput!): Int\n"
+        "}\n"
+        "input TemperatureConfigInput {\n"
+        "  sensor: SensorInput unit: Unit retype: String\n"
+        "}\n"
+        "input SensorInput { id: ID required: Int! optional: Int! = 1 }\n"
+        "enum Unit { C }\n"
+        "input Unused { y: Int }\n"
+        "enum Mode { A }\n"
+    )
+
+    def test_input_changes_on_sent_types_are_breaking(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "lib.py").write_text(
+            "class Client:\n"
+            "    def update_temperature_config(self):\n"
+            '        return """mutation ($input: TemperatureConfigInput!) {\n'
+            "            updateTemperatureConfig(input: $input)\n"
+            '        }"""\n'
+        )
+
+        def fake_inventory(schema: Any) -> st.Inventory:
+            return st.build_inventory(
+                schema, root=tmp_path, sources=("lib.py",), registry=()
+            )
+
+        monkeypatch.setattr(uw, "build_inventory", fake_inventory)
+        schemas = {"v4.37.6": self.OLD, "v4.37.7": self.NEW, MAIN_SHA: self.NEW}
+        releases = [r for r in GITHUB["releases"] if r["tag_name"] <= "v4.37.7"]
+        report = uw.scan(FakeGitHub(releases=releases, schemas=schemas), REPO)
+        entry = _entry(report, "v4.37.7")
+        result = {c["coordinate"]: c["classification"] for c in entry["changes"]}
+        assert result == {
+            "TemperatureConfigInput.enabled": "bug",
+            "TemperatureConfigInput.retype": "bug",
+            "SensorInput.required": "bug",
+            "SensorInput.optional": "no_action",
+            "Unit.F": "bug",
+            "Unused.x": "no_action",
+            "Unused.y": "no_action",
+            "Mode.B": "no_action",
+        }
+        removed = _change(entry, "TemperatureConfigInput.enabled")
+        assert removed["methods"] == ["update_temperature_config"]
+        assert removed["locations"] == ["lib.py:3"]
+        # graphql.validate cannot see these; no validation error is reported.
+        assert not [c for c in entry["changes"] if c["kind"] == "validation_error"]
+        bug = next(i for i in report["issues"] if i["group"] == "v4.37.7:bug")
+        assert "`TemperatureConfigInput.enabled`: input field removed" in bug["body"]
+        assert "`update_temperature_config`" in bug["body"]
+
+
 class TestClassification:
     @pytest.mark.parametrize(
         ("change", "selected", "expected"),
@@ -454,6 +561,22 @@ class TestClassification:
             (st.SchemaChange("arg_removed", "A.b(x:)"), True, "no_action"),
             (st.SchemaChange("enum_value_removed", "E.V"), False, "no_action"),
             (st.SchemaChange("input_field_added", "I.x"), False, "no_action"),
+            (st.SchemaChange("input_field_removed", "In.x"), True, "bug"),
+            (st.SchemaChange("input_field_removed", "Z.x"), False, "no_action"),
+            (
+                st.SchemaChange(
+                    "input_field_added", "In.y", after="Int!", detail="required"
+                ),
+                True,
+                "bug",
+            ),
+            (
+                st.SchemaChange("input_field_added", "In.y", after="Int"),
+                False,
+                "no_action",
+            ),
+            (st.SchemaChange("enum_value_removed", "In.V"), True, "bug"),
+            (st.SchemaChange("type_removed", "In"), True, "bug"),
         ],
     )
     def test_classify(
@@ -463,10 +586,12 @@ class TestClassification:
             "A.b": st.Selection({"get_a"}, {"x:1"}),
             "A.d": st.Selection({"get_d"}, {"x:2"}),
         }
-        classification, selection = uw.classify(change, selections)
+        inputs = {"In": st.Selection({"set_in"}, {"x:3"})}
+        classification, selection = uw.classify(change, selections, inputs)
         assert classification == expected
         assert (selection is not None) == selected
-        if change.kind == "type_removed" and selection:
+        if change.kind == "type_removed" and change.coordinate == "A":
+            assert selection is not None
             assert selection.methods == {"get_a", "get_d"}
 
 
@@ -525,6 +650,65 @@ class TestRendering:
         assert issue["body"].endswith("for the full report._")
         assert issue["body"].count("<!-- upstream-change:") == 400
 
+    def test_large_groups_split_and_every_body_fits(self) -> None:
+        change = {
+            "kind": "field_added",
+            "before": None,
+            "after": None,
+            "detail": "",
+            "classification": "enhancement",
+            "selected": False,
+            "methods": [],
+            "locations": [],
+            "already_reported": None,
+        }
+        changes = [
+            dict(
+                change,
+                id=f"field_added:SomeLongTypeName.field{n}",
+                coordinate=f"T.f{n}",
+            )
+            for n in range(2000)
+        ]
+        entry = {
+            "key": "v1.0.0",
+            "kind": "release",
+            "base": "v0.9.0",
+            "ref": "v1.0.0",
+            "compare_url": "https://github.com/unraid/api/compare/v0.9.0...v1.0.0",
+            "release_url": None,
+            "changes": changes,
+            "pull_requests": [],
+        }
+        issues = uw.render_issues(entry, "enhancement", changes, [], {})
+        assert len(issues) > 1
+        assert all(len(issue["body"]) <= uw.BODY_LIMIT for issue in issues)
+        ids = [cid for issue in issues for cid in issue["change_ids"]]
+        assert ids == [c["id"] for c in changes]
+        groups = [issue["group"] for issue in issues]
+        assert len(set(groups)) == len(groups)
+        assert all(g.startswith("v1.0.0:enhancement:part-") for g in groups)
+        for issue in issues:
+            assert f"<!-- upstream-group: {issue['group']} -->" in issue["body"]
+            for cid in issue["change_ids"]:
+                assert f"<!-- upstream-change: {cid} -->" in issue["body"]
+        assert issues[0]["title"].endswith(f"(part 1 of {len(issues)})")
+
+        # A retry after a partial run only reopens the missing parts.
+        existing = {groups[0]: 1}
+        retry = uw.render_issues(entry, "enhancement", changes, [], existing)
+        assert [i["group"] for i in retry] == groups[1:]
+
+        # Small groups keep the plain group key, and an existing one is skipped.
+        single = uw.render_issues(entry, "enhancement", changes[:3], [], {})
+        assert [i["group"] for i in single] == ["v1.0.0:enhancement"]
+        assert (
+            uw.render_issues(
+                entry, "enhancement", changes[:3], [], {"v1.0.0:enhancement": 4}
+            )
+            == []
+        )
+
     def test_describe_change(self) -> None:
         base = {"before": None, "after": None, "detail": ""}
         assert (
@@ -559,6 +743,74 @@ class TestRendering:
         ]
         assert uw.behaviour_matches("change error format") == ["error shape"]
         assert uw.behaviour_matches("fix typo in docs") == []
+
+
+class TestBehaviourNotes:
+    def test_transient_pr_errors_fail_the_scan(self, tmp_path: Path) -> None:
+        for error in (
+            st.FetchError("u", 403, "rate limit exceeded"),
+            st.FetchError("u", 502, "Bad Gateway"),
+            st.FetchError("u", None, "timed out"),
+        ):
+            github = FakeGitHub()
+            github.pull_errors["2095"] = error
+            with pytest.raises(st.FetchError):
+                uw.scan(github, REPO, since="v4.37.7", until="v4.37.8")
+            output = tmp_path / "report.json"
+            argv = ["scan", "--since", "v4.37.7", "--output", str(output)]
+            assert uw.main(argv, fetch=github) == 1
+            assert not output.exists()
+
+    def test_missing_pr_is_skipped(self) -> None:
+        github = FakeGitHub()
+        del github.pulls["2126"]
+        report = uw.scan(github, REPO, since="v4.37.7", until="v4.37.8")
+        numbers = [p["number"] for p in _entry(report, "v4.37.8")["pull_requests"]]
+        assert numbers == [2123, 2095]
+
+    def test_release_note_lines_with_pr_links_are_analysed(self) -> None:
+        release = uw.Release(
+            "v4.37.8",
+            "* **api:** add rate limiting to websocket requests ([#3001]("
+            "https://github.com/unraid/api/issues/3001))\n"
+            "* **graphql:** disable introspection (#3002)\n"
+            "* **ui:** tidy (#3003)\n",
+            "https://github.com/unraid/api/releases/tag/v4.37.8",
+        )
+        github = FakeGitHub()
+        github.pulls = {
+            "3001": {"title": "chore: misc", "html_url": "pr1", "body": ""},
+            "3002": {
+                "title": "fix: introspection",
+                "html_url": "pr2",
+                "body": "Applies CORS checks.",
+            },
+            "3003": {"title": "chore: tidy", "html_url": "pr3", "body": ""},
+        }
+        notes, pulls = uw.release_behaviour(github, release)
+        assert len(pulls) == 3
+        by_id = {note["id"]: note for note in notes}
+        # 3001: the PR text matches nothing, but its release-note line does.
+        line_note = by_id["behaviour:v4.37.8:pr-3001"]
+        assert line_note["source"] == "unraid/api#3001"
+        assert line_note["rules"] == ["rate limiting", "WebSocket"]
+        assert line_note["url"] == "https://github.com/unraid/api/pull/3001"
+        # 3002: one note per PR; the line's rules merge into the PR note.
+        assert [n["id"] for n in notes].count("behaviour:v4.37.8:pr-3002") == 1
+        assert by_id["behaviour:v4.37.8:pr-3002"]["rules"] == [
+            "introspection",
+            "CORS/CSRF",
+        ]
+        assert set(by_id) == {"behaviour:v4.37.8:pr-3001", "behaviour:v4.37.8:pr-3002"}
+
+    def test_lines_beyond_the_pr_limit_are_still_analysed(self) -> None:
+        body = " ".join(f"#{n}" for n in range(uw.MAX_PULLS_PER_RELEASE))
+        body += "\n* bound request size limit (#9000)\n"
+        release = uw.Release("v4.37.8", body, "rel")
+        notes, _ = uw.release_behaviour(FakeGitHub(), release)
+        assert [(n["id"], n["rules"]) for n in notes] == [
+            ("behaviour:v4.37.8:pr-9000", ["request limits"])
+        ]
 
 
 class TestCli:

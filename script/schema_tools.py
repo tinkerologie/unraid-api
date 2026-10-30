@@ -35,10 +35,13 @@ from graphql import (
     GraphQLSchema,
     TypeInfo,
     TypeInfoVisitor,
+    Undefined,
     Visitor,
     build_schema,
+    get_named_type,
     graphql_sync,
     is_introspection_type,
+    is_non_null_type,
     is_specified_scalar_type,
     parse,
     validate,
@@ -53,6 +56,7 @@ from unraid_api.capabilities import (  # noqa: E402
     build_introspection_query,
 )
 from unraid_api.client import UnraidClient  # noqa: E402
+from unraid_api.exceptions import UnraidAPIError  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine, Iterable
@@ -327,12 +331,41 @@ def _render_containers_safe(caps: ServerCapabilities) -> str:
     return _render_client(caps)._build_containers_query_safe(caps)
 
 
-def _render_vms(caps: ServerCapabilities) -> str:
+class _Sent(Exception):
+    """Raised by the recording transport once the document has been sent."""
+
+
+def _capture(
+    caps: ServerCapabilities,
+    transport: str,
+    call: Callable[[UnraidClient], Coroutine[Any, Any, Any]],
+) -> str | None:
+    """Record the document a client method sends through `transport`.
+
+    Returns None when the method refuses to send for these capabilities.
+    """
     client = _render_client(caps)
-    recorder = AsyncMock(return_value={"vms": {"domains": []}})
-    client.query = recorder  # type: ignore[method-assign]
-    _run_without_loop(client.typed_get_vms())
-    return str(recorder.call_args.args[0])
+    recorder = AsyncMock(side_effect=_Sent)
+    setattr(client, transport, recorder)
+    try:
+        _run_without_loop(call(client))
+    except _Sent:
+        return str(recorder.call_args.args[0])
+    except UnraidAPIError:
+        return None
+    raise RuntimeError(f"Renderer sent nothing through {transport}()")
+
+
+def _render_vms(caps: ServerCapabilities) -> str | None:
+    return _capture(caps, "query", lambda client: client.typed_get_vms())
+
+
+def _render_install_plugin(caps: ServerCapabilities) -> str | None:
+    return _capture(caps, "mutate", lambda client: client.install_plugin("u"))
+
+
+def _render_install_language(caps: ServerCapabilities) -> str | None:
+    return _capture(caps, "mutate", lambda client: client.install_language("u"))
 
 
 def _render_introspection(_caps: ServerCapabilities) -> str:
@@ -345,7 +378,8 @@ class DynamicSource:
 
     function: str
     path: str
-    render: Callable[[ServerCapabilities], str]
+    # Returns None when the operation is not sent for these capabilities.
+    render: Callable[[ServerCapabilities], str | None]
     # Methods to attribute the operation to; None means the function's
     # transitive public callers.
     methods: tuple[str, ...] | None = None
@@ -355,6 +389,19 @@ DYNAMIC_REGISTRY: tuple[DynamicSource, ...] = (
     DynamicSource("_build_containers_query", CLIENT_PATH, _render_containers),
     DynamicSource("_build_containers_query_safe", CLIENT_PATH, _render_containers_safe),
     DynamicSource("typed_get_vms", CLIENT_PATH, _render_vms),
+    # One literal document; the field is swapped per public method at runtime.
+    DynamicSource(
+        "_install_plugin_operation",
+        CLIENT_PATH,
+        _render_install_plugin,
+        methods=("install_plugin",),
+    ),
+    DynamicSource(
+        "_install_plugin_operation",
+        CLIENT_PATH,
+        _render_install_language,
+        methods=("install_language",),
+    ),
     # Every capability-gated method awaits get_capabilities(); attributing the
     # introspection query to all of them would bury the one method that sends it.
     DynamicSource(
@@ -512,6 +559,8 @@ def build_inventory(
         origin = Origin(source.function, source.path, def_line, dynamic=True)
         for variant, caps in variants:
             document = source.render(caps)
+            if document is None:
+                continue
             op_type = _operation_type(document) or "query"
             add(document, op_type, methods, origin, variant)
 
@@ -620,6 +669,53 @@ def selected_coordinates(schema: GraphQLSchema, inventory: Inventory) -> Selecti
             for origin in op.origins:
                 line = inventory.field_line(origin, name, doc_line)
                 entry.locations.add(f"{origin.path}:{line}")
+    return index
+
+
+def _input_closure(schema: GraphQLSchema, type_name: str) -> list[str]:
+    """Input object and enum types reachable from `type_name`, itself included."""
+    found: list[str] = []
+    stack = [type_name]
+    while stack:
+        name = stack.pop()
+        gql_type = schema.get_type(name)
+        if name in found or not isinstance(
+            gql_type, (GraphQLInputObjectType, GraphQLEnumType)
+        ):
+            continue
+        found.append(name)
+        if isinstance(gql_type, GraphQLInputObjectType):
+            stack.extend(get_named_type(f.type).name for f in gql_type.fields.values())
+    return found
+
+
+def input_usage(schema: GraphQLSchema, inventory: Inventory) -> SelectionIndex:
+    """Map input object and enum types sent in variables to methods and `file:line`.
+
+    Covers the types named by each operation's variable definitions and every
+    input type and enum reachable through their fields. `graphql.validate`
+    cannot see breakage inside these, because variable values are not part of
+    the document.
+    """
+    index: SelectionIndex = {}
+    for op in inventory.operations:
+        try:
+            document = parse(op.document)
+        except GraphQLError:
+            continue
+        for definition in document.definitions:
+            for variable in getattr(definition, "variable_definitions", None) or ():
+                type_node = variable.type
+                while not hasattr(type_node, "name"):
+                    type_node = type_node.type
+                doc_line = variable.loc.start_token.line if variable.loc else 1
+                name = variable.variable.name.value
+                for type_name in _input_closure(schema, type_node.name.value):
+                    entry = index.setdefault(type_name, Selection())
+                    entry.methods.update(op.methods)
+                    for origin in op.origins:
+                        line = inventory.field_line(origin, name, doc_line)
+                        entry.locations.add(f"{origin.path}:{line}")
     return index
 
 
@@ -791,11 +887,19 @@ def _diff_input_fields(
     for name in old_fields.keys() - new_fields.keys():
         changes.append(SchemaChange("input_field_removed", f"{type_name}.{name}"))
     for name in new_fields.keys() - old_fields.keys():
+        new_field = new_fields[name]
+        # graphql-core 3.3 keeps SDL defaults in `default`; 3.2 in `default_value`.
+        has_default = (
+            getattr(new_field, "default", None) is not None
+            or new_field.default_value is not Undefined
+        )
+        required = is_non_null_type(new_field.type) and not has_default
         changes.append(
             SchemaChange(
                 "input_field_added",
                 f"{type_name}.{name}",
-                after=str(new_fields[name].type),
+                after=str(new_field.type),
+                detail="required" if required else "",
             )
         )
     for name in old_fields.keys() & new_fields.keys():
