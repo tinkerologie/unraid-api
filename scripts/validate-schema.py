@@ -2,26 +2,31 @@
 """Unraid API ↔ GraphQL Schema Validator.
 
 This script validates that every GraphQL query, mutation, and subscription
-in the unraid-api client library is compatible with the actual schema
-exposed by a live Unraid server. It catches field renames, removed fields,
-changed nesting (e.g., the capacity { kilobytes { ... } } issue from #196),
-and type mismatches BEFORE they hit production.
+in the unraid-api client library is compatible with the Unraid API schema.
+It catches field renames, removed fields, changed nesting (e.g., the
+capacity { kilobytes { ... } } issue from #196), and type mismatches BEFORE
+they hit production.
 
-The live Unraid server schema is the source of truth.
+The schema source is, in order of precedence:
+  --schema-file PATH   an SDL file (offline with --schema-only)
+  --api-version X.Y.Z  the upstream SDL (api/generated-schema.graphql) at vX.Y.Z
+  --introspect         live introspection (refused by Unraid API 4.37.8+)
+  default              the upstream SDL for the server's reported API version
 
 How it works:
-  1. Introspects the live Unraid GraphQL schema to get all types and fields
-  2. Extracts all GraphQL operation strings from the client source code
-  3. Validates every requested field exists in the live schema
+  1. Loads the schema from one of the sources above
+  2. Builds the library operation inventory (script/schema_tools.py)
+  3. Validates every operation with graphql.validate (SDL sources)
   4. Runs every client method against the live server
   5. Validates response data matches Pydantic models
   6. Reports any schema mismatches, missing fields, or validation errors
 
 Usage:
   python scripts/validate-schema.py                 # Run all validations
-  python scripts/validate-schema.py --schema-only   # Only introspect + validate fields
+  python scripts/validate-schema.py --schema-only   # Only load schema + validate fields
+  python scripts/validate-schema.py --schema-file api.graphql --schema-only  # Offline
   python scripts/validate-schema.py --live-only     # Only run live method tests
-  python scripts/validate-schema.py --dump-schema   # Dump introspected schema to JSON
+  python scripts/validate-schema.py --dump-schema   # Dump the schema type map to JSON
 
 Reads credentials from scripts/.env or UNRAID_HOST/UNRAID_API_KEY env vars.
 """
@@ -29,7 +34,6 @@ Reads credentials from scripts/.env or UNRAID_HOST/UNRAID_API_KEY env vars.
 from __future__ import annotations
 
 import argparse
-import ast
 import asyncio
 import json
 import os
@@ -40,8 +44,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Ensure the local src is importable
+# Ensure the local src and the shared schema tooling are importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "script"))
+
+from graphql import (  # noqa: E402
+    GraphQLEnumType,
+    GraphQLInputObjectType,
+    GraphQLInterfaceType,
+    GraphQLObjectType,
+    GraphQLSchema,
+    get_named_type,
+    is_list_type,
+    is_non_null_type,
+)
+from schema_tools import (  # noqa: E402
+    ExtractedQuery,
+    FetchError,
+    build_inventory,
+    https_get,
+    load_sdl,
+    schema_url,
+    validate_inventory,
+)
 
 from unraid_api import UnraidClient  # noqa: E402
 
@@ -300,101 +325,6 @@ async def introspect_schema(client: UnraidClient) -> dict[str, SchemaType]:
 
 
 # =============================================================================
-# GraphQL Query Extraction from Source Code
-# =============================================================================
-
-
-@dataclass
-class ExtractedQuery:
-    """A GraphQL query extracted from the client source."""
-
-    method_name: str
-    operation_type: str  # query, mutation, subscription
-    query_string: str
-    line_number: int
-
-
-def _reconstruct_fstring(node: ast.JoinedStr) -> str:
-    """Reconstruct an f-string, replacing interpolated expressions with placeholders."""
-    parts = []
-    for value in node.values:
-        if isinstance(value, ast.Constant):
-            parts.append(str(value.value))
-        else:
-            # Replace interpolated expressions with a dummy field name
-            # that won't affect GraphQL parsing
-            parts.append("")
-    return "".join(parts)
-
-
-def extract_queries_from_source(client_path: str) -> list[ExtractedQuery]:
-    """Extract all GraphQL queries from the client.py source code.
-
-    Uses AST parsing to find all string assignments that look like GraphQL operations.
-    Handles both regular strings and f-strings.
-    """
-    source = Path(client_path).read_text()
-    tree = ast.parse(source)
-    queries: list[ExtractedQuery] = []
-
-    # Collect all JoinedStr node ids so we can skip their child Constants
-    fstring_constant_ids: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            for child in ast.walk(node):
-                if isinstance(child, ast.Constant):
-                    fstring_constant_ids.add(id(child))
-
-    # Walk the AST to find method definitions
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-
-        method_name = node.name
-
-        # Find string constants and f-strings that look like GraphQL operations
-        for child in ast.walk(node):
-            # Handle f-strings
-            if isinstance(child, ast.JoinedStr):
-                value = _reconstruct_fstring(child).strip()
-                lineno = child.lineno
-            elif isinstance(child, ast.Constant) and isinstance(child.value, str):
-                # Skip constants that are part of f-strings
-                if id(child) in fstring_constant_ids:
-                    continue
-                value = child.value.strip()
-                lineno = child.lineno
-            else:
-                continue
-
-            # Check if it's a GraphQL operation
-            for op_type in ("query", "mutation", "subscription"):
-                if value.startswith(op_type) or value.startswith(f"{op_type} "):
-                    queries.append(
-                        ExtractedQuery(
-                            method_name=method_name,
-                            operation_type=op_type,
-                            query_string=value,
-                            line_number=lineno,
-                        )
-                    )
-                    break
-            else:
-                # Also match anonymous queries like "{ array { ... } }"
-                if value.startswith("{") and not value.startswith("{%"):
-                    queries.append(
-                        ExtractedQuery(
-                            method_name=method_name,
-                            operation_type="query",
-                            query_string=f"query {value}",
-                            line_number=lineno,
-                        )
-                    )
-
-    return queries
-
-
-# =============================================================================
 # GraphQL Field Validation Against Schema
 # =============================================================================
 
@@ -645,6 +575,120 @@ def validate_queries(
         all_issues.extend(issues)
 
     return all_issues
+
+
+# =============================================================================
+# SDL Schema Source (offline, or upstream for the server's API version)
+# =============================================================================
+
+
+_API_VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+)$")
+
+
+def normalise_api_version(api_version: str) -> str | None:
+    """Return the upstream release tag (`v4.37.9`) for an API version, or None."""
+    match = _API_VERSION_RE.match(api_version.strip())
+    return f"v{match.group(1)}" if match else None
+
+
+def fetch_upstream_schema(tag: str) -> GraphQLSchema:
+    """Fetch the upstream generated SDL for a release tag."""
+    return load_sdl(https_get(schema_url(tag)).decode("utf-8"))
+
+
+def schema_types_from_graphql(schema: GraphQLSchema) -> dict[str, SchemaType]:
+    """Adapt a graphql-core schema to the introspection-style type map."""
+    types: dict[str, SchemaType] = {}
+    for name, gql_type in schema.type_map.items():
+        if name.startswith("__"):
+            continue
+        schema_type = SchemaType(name=name, kind=_kind_of(gql_type))
+        for field_name, gql_field in getattr(gql_type, "fields", {}).items():
+            named = get_named_type(gql_field.type)
+            schema_type.fields[field_name] = SchemaField(
+                name=field_name,
+                type_name=named.name,
+                type_kind=_kind_of(named),
+                is_list=_has_list(gql_field.type),
+                is_non_null=is_non_null_type(gql_field.type),
+                args=list(getattr(gql_field, "args", {}) or {}),
+            )
+        if isinstance(gql_type, GraphQLEnumType):
+            schema_type.enum_values = list(gql_type.values)
+        types[name] = schema_type
+    return types
+
+
+def _kind_of(named: Any) -> str:
+    if isinstance(named, GraphQLObjectType):
+        return "OBJECT"
+    if isinstance(named, GraphQLInterfaceType):
+        return "INTERFACE"
+    if isinstance(named, GraphQLInputObjectType):
+        return "INPUT_OBJECT"
+    if isinstance(named, GraphQLEnumType):
+        return "ENUM"
+    return type(named).__name__.removeprefix("GraphQL").removesuffix("Type").upper()
+
+
+def _has_list(gql_type: Any) -> bool:
+    while gql_type is not None:
+        if is_list_type(gql_type):
+            return True
+        gql_type = getattr(gql_type, "of_type", None)
+    return False
+
+
+def validate_sdl(schema: GraphQLSchema) -> list[ValidationIssue]:
+    """Validate the full library operation inventory with graphql.validate."""
+    inventory = build_inventory(schema)
+    print(f"  {len(inventory.operations)} unique operations in the inventory")
+    return [
+        ValidationIssue(
+            method_name=", ".join(failure.methods),
+            severity="ERROR",
+            message=failure.message,
+            field_path=", ".join(failure.locations),
+        )
+        for failure in validate_inventory(schema, inventory)
+    ]
+
+
+def inventory_as_queries() -> list[ExtractedQuery]:
+    """The operation inventory in the shape the introspection validator uses."""
+    return [
+        ExtractedQuery(
+            method_name=", ".join(op.methods),
+            operation_type=op.operation_type,
+            query_string=op.document,
+            line_number=op.origins[0].line,
+            path=op.origins[0].path,
+        )
+        for op in build_inventory().operations
+    ]
+
+
+def dump_schema(schema_types: dict[str, SchemaType]) -> None:
+    """Write the schema type map to scripts/schema-dump.json."""
+    dump_path = Path(__file__).resolve().parent / "schema-dump.json"
+    dump_data = {}
+    for type_name, st in sorted(schema_types.items()):
+        dump_data[type_name] = {
+            "kind": st.kind,
+            "fields": {
+                fn: {
+                    "type": sf.type_name,
+                    "kind": sf.type_kind,
+                    "is_list": sf.is_list,
+                    "is_non_null": sf.is_non_null,
+                    "args": sf.args,
+                }
+                for fn, sf in sorted(st.fields.items())
+            },
+            "enum_values": st.enum_values,
+        }
+    dump_path.write_text(json.dumps(dump_data, indent=2))
+    print(f"  Schema dumped to {dump_path}")
 
 
 # =============================================================================
@@ -1057,15 +1101,71 @@ def print_validation_report(
 # =============================================================================
 
 
+def load_schema_source(
+    args: argparse.Namespace, api_version: str | None
+) -> GraphQLSchema | None:
+    """Load the SDL schema from --schema-file, or fetch the upstream release SDL.
+
+    Returns None (after printing why) when no schema can be determined.
+    """
+    if args.schema_file:
+        print(f"\n→ Loading schema from {args.schema_file}...")
+        return load_sdl(Path(args.schema_file))
+    version = args.api_version or api_version or "unknown"
+    tag = normalise_api_version(version)
+    if tag is None:
+        print(
+            f"ERROR: Cannot determine the upstream schema for API version {version!r}."
+        )
+        print("Pass --schema-file PATH or --api-version X.Y.Z.")
+        return None
+    print(f"\n→ Fetching upstream schema for unraid/api {tag}...")
+    try:
+        return fetch_upstream_schema(tag)
+    except FetchError as err:
+        print(f"ERROR: {err}")
+        print("Pass --schema-file PATH or --api-version X.Y.Z.")
+        return None
+
+
+def run_schema_checks(
+    schema: GraphQLSchema | None,
+    schema_types: dict[str, SchemaType],
+    args: argparse.Namespace,
+) -> tuple[list[ValidationIssue], list[ValidationIssue]]:
+    """Dump/summarise the schema and validate the library against it."""
+    print(f"  Found {len(schema_types)} types")
+    if args.dump_schema:
+        dump_schema(schema_types)
+    print_schema_summary(schema_types)
+    if args.live_only:
+        return [], []
+    if schema is not None:
+        print("\n→ Validating every library operation with graphql.validate...")
+        query_issues = validate_sdl(schema)
+    else:
+        print("\n→ Extracting GraphQL operations from client source...")
+        queries = inventory_as_queries()
+        print(f"  {len(queries)} unique operations")
+        print("\n→ Validating query fields against live schema...")
+        query_issues = validate_queries(queries, schema_types)
+    print("\n→ Comparing Pydantic models to schema types...")
+    model_issues = compare_models_to_schema(schema_types)
+    return query_issues, model_issues
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(
         description="Unraid API ↔ GraphQL Schema Validator",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             This tool validates that the unraid-api client's GraphQL queries,
-            mutations, and subscriptions match the actual Unraid server schema.
+            mutations, and subscriptions match the Unraid API schema.
 
-            The live Unraid server schema is the source of truth.
+            By default the schema is the upstream SDL
+            (api/generated-schema.graphql) for the server's API version.
+            Unraid API 4.37.8+ refuses introspection, so --introspect only
+            works on servers that still allow it.
 
             It catches issues like ha-unraid#196 where field renames or nesting
             changes break the client at runtime.
@@ -1073,14 +1173,17 @@ async def main() -> int:
             examples:
               %(prog)s                  # Full validation (schema + live)
               %(prog)s --schema-only    # Validate queries against schema only
+              %(prog)s --schema-file api.graphql --schema-only  # Offline
+              %(prog)s --api-version 4.37.9 --schema-only       # No server
+              %(prog)s --introspect     # Introspect the live server instead
               %(prog)s --live-only      # Run live method tests only
-              %(prog)s --dump-schema    # Dump full introspected schema to JSON
+              %(prog)s --dump-schema    # Dump the schema type map to JSON
         """),
     )
     parser.add_argument(
         "--schema-only",
         action="store_true",
-        help="Only run schema introspection and field validation",
+        help="Only load the schema and validate fields",
     )
     parser.add_argument(
         "--live-only",
@@ -1090,17 +1193,36 @@ async def main() -> int:
     parser.add_argument(
         "--dump-schema",
         action="store_true",
-        help="Dump the introspected schema to schema-dump.json",
+        help="Dump the schema type map to schema-dump.json",
+    )
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
+        "--schema-file",
+        metavar="PATH",
+        help="Validate against this SDL file; with --schema-only no server is needed",
+    )
+    source.add_argument(
+        "--api-version",
+        help="Fetch the upstream SDL for this API version instead of the server's",
+    )
+    source.add_argument(
+        "--introspect",
+        action="store_true",
+        help="Introspect the live server (refused by Unraid API 4.37.8+)",
     )
     args = parser.parse_args()
 
-    # Find client source
-    client_path = (
-        Path(__file__).resolve().parent.parent / "src" / "unraid_api" / "client.py"
-    )
-    if not client_path.exists():
-        print(f"ERROR: Client source not found at {client_path}")
-        return 1
+    live_results: list[LiveTestResult] | None = None
+
+    # === Offline: SDL only, no credentials or server ===
+    if args.schema_only and (args.schema_file or args.api_version):
+        schema = load_schema_source(args, None)
+        if schema is None:
+            return 1
+        query_issues, model_issues = run_schema_checks(
+            schema, schema_types_from_graphql(schema), args
+        )
+        return print_validation_report(query_issues, model_issues, live_results)
 
     # === Connect to live server ===
     host, api_key = load_env()
@@ -1108,69 +1230,29 @@ async def main() -> int:
     print(f"API Key: {'*' * 8}...{'*' * 4} (loaded)")
 
     async with UnraidClient(host, api_key, verify_ssl=False) as client:
-        # Get server version for context
+        # Get server version for context and the default schema source
+        api_version: str | None = None
         try:
             ver = await client.get_version()
+            api_version = ver.api
             print(f"Server: Unraid {ver.unraid}, API {ver.api}")
         except Exception as e:
             print(f"WARNING: Could not get server version: {e}")
 
-        # Step 1: Introspect live schema
-        print("\n→ Introspecting live GraphQL schema...")
-        schema_types = await introspect_schema(client)
-        print(f"  Found {len(schema_types)} types")
+        schema: GraphQLSchema | None = None
+        if args.introspect:
+            print("\n→ Introspecting live GraphQL schema...")
+            schema_types = await introspect_schema(client)
+        else:
+            schema = load_schema_source(args, api_version)
+            if schema is None:
+                return 1
+            schema_types = schema_types_from_graphql(schema)
 
-        if args.dump_schema:
-            dump_path = Path(__file__).resolve().parent / "schema-dump.json"
-            dump_data = {}
-            for type_name, st in sorted(schema_types.items()):
-                dump_data[type_name] = {
-                    "kind": st.kind,
-                    "fields": {
-                        fn: {
-                            "type": sf.type_name,
-                            "kind": sf.type_kind,
-                            "is_list": sf.is_list,
-                            "is_non_null": sf.is_non_null,
-                            "args": sf.args,
-                        }
-                        for fn, sf in sorted(st.fields.items())
-                    },
-                    "enum_values": st.enum_values,
-                }
-            dump_path.write_text(json.dumps(dump_data, indent=2))
-            print(f"  Schema dumped to {dump_path}")
-
-        print_schema_summary(schema_types)
-
-        query_issues: list[ValidationIssue] = []
-        model_issues: list[ValidationIssue] = []
-        live_results: list[LiveTestResult] | None = None
-
-        if not args.live_only:
-            # Step 2: Extract and validate queries
-            print("\n→ Extracting GraphQL operations from client source...")
-            queries = extract_queries_from_source(str(client_path))
-            print(f"  Found {len(queries)} operations")
-
-            # Deduplicate by query string
-            seen: set[str] = set()
-            unique_queries: list[ExtractedQuery] = []
-            for q in queries:
-                key = q.query_string.strip()
-                if key not in seen:
-                    seen.add(key)
-                    unique_queries.append(q)
-            print(f"  {len(unique_queries)} unique operations")
-
-            print("\n→ Validating query fields against live schema...")
-            query_issues = validate_queries(unique_queries, schema_types)
-
-            print("\n→ Comparing Pydantic models to schema types...")
-            model_issues = compare_models_to_schema(schema_types)
+        query_issues, model_issues = run_schema_checks(schema, schema_types, args)
 
         if not args.schema_only:
-            # Step 3: Run live method tests
+            # Run live method tests
             print("\n→ Running live method tests...")
             live_results = await run_live_method_tests(client)
 

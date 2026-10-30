@@ -95,12 +95,62 @@ pytest --cov=src --cov-report=term-missing
 ruff check .
 ruff format --check .
 
-# Static type checking with mypy
-mypy src
+# Static type checking with mypy (library and the script/ tooling)
+mypy src script
 
 # Run pre-commit checks
 pre-commit run --all-files
 ```
+
+---
+
+## Upstream Watch
+
+The `Upstream watch` workflow (`.github/workflows/upstream-watch.yml`) tracks
+[unraid/api](https://github.com/unraid/api) so upstream changes reach this library early. It runs
+at 02:00 Australia/Brisbane on the 1st and 15th of each month, and on demand from the Actions tab
+(`workflow_dispatch`, with optional `since`/`until` release tags).
+
+- **Scan job** (read-only): `script/upstream_watch.py scan` diffs `api/generated-schema.graphql`
+  between consecutive new release tags and from the latest release to `main`, validates every
+  library operation against each new schema with `graphql.validate`, maps changed fields to the
+  library methods and `file:line` that select them, and flags release notes and linked PRs that
+  change request handling (introspection, request limits, auth, rate limiting, error shapes). It
+  writes one JSON report.
+- **Report job** (`issues: write` only): opens one issue per finding group and writes the report to
+  the job summary, which lists every release and change checked, including those that need no
+  action.
+
+**Labels.** Breaking changes (an operation no longer validates, or a field or root the library
+selects was removed or became nullable) and behaviour changes open a `bug` + `upstream` issue. New
+types, fields and root fields, and new deprecations, open an `enhancement` + `upstream` issue. The
+job creates a missing label before use, and sets labels in the create call, because issues opened
+with `GITHUB_TOKEN` do not trigger the issue labeler.
+
+**Markers and state.** Each issue body starts with hidden markers: `<!-- upstream-group: ... -->`,
+`<!-- upstream-release: vX.Y.Z -->` (or `<!-- upstream-main: <sha> -->`) and one
+`<!-- upstream-change: <id> -->` per change. Only markers in issues authored by
+`github-actions[bot]` count, open or closed, so closing an issue does not reopen it, and a change
+first reported from `main` is not reported again when it ships in a release. The closed
+`Upstream watch state` issue (label `upstream`) records the last processed release and `main`
+commit. Leave it closed and do not edit its markers.
+
+Run the scan locally (read-only; writes only the report file):
+
+```bash
+GITHUB_TOKEN=$(gh auth token) uv run --all-extras python script/upstream_watch.py scan \
+  --since v4.37.6 --until v4.37.9 --output report.json
+```
+
+Validate the library against a schema without a server (Unraid API 4.37.8+ refuses introspection):
+
+```bash
+uv run --all-extras python scripts/validate-schema.py --schema-file generated-schema.graphql --schema-only
+uv run --all-extras python scripts/validate-schema.py --api-version 4.37.9 --schema-only
+```
+
+Without these options, `validate-schema.py` fetches the upstream SDL for the server's API version;
+`--introspect` keeps the old live-introspection path.
 
 ---
 

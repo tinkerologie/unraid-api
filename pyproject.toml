@@ -78,7 +78,7 @@ path = "src/unraid_api/_version.py"
 [tool.ruff]
 target-version = "py311"
 line-length = 88
-src = ["src", "tests"]
+src = ["src", "tests", "script"]
 extend-exclude = ["scripts"]
 
 [tool.ruff.lint]
@@ -140,6 +140,7 @@ ignore_missing_imports = true
 # =============================================================================
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["script"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = [
@@ -155,7 +156,7 @@ markers = [
 # Coverage Configuration
 # =============================================================================
 [tool.coverage.run]
-source = ["src/unraid_api"]
+source = ["src/unraid_api", "script"]
 branch = true
 omit = ["tests/*"]
 

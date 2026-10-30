@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Upstream watch workflow** — `.github/workflows/upstream-watch.yml` runs on the 1st and 15th of each month (and on demand). A read-only scan diffs unraid/api's `api/generated-schema.graphql` between new release tags and from the latest release to `main`, validates every library operation against each new schema, names the library methods and `file:line` a change affects, and flags release notes that change request handling. A separate job with only `issues: write` opens deduplicated `bug`/`enhancement` + `upstream` issues and records the last processed release in a closed `Upstream watch state` issue ([#136](https://github.com/tinkerologie/unraid-api/issues/136)).
+- **`script/upstream_watch.py scan`** — Runs the same scan locally for any release range (`--since`/`--until`) and writes a JSON report with the classified changes, issue payloads and a summary ([#136](https://github.com/tinkerologie/unraid-api/issues/136)).
+- **`scripts/validate-schema.py --schema-file`** — Validates every library operation against an SDL file with `graphql.validate`, without credentials or a server when combined with `--schema-only`. `--api-version` fetches the upstream SDL for a given version ([#136](https://github.com/tinkerologie/unraid-api/issues/136)).
+
 ### Changed
 
 - **PR governance** — The `print()` check applies to the package source under `src/` only; the developer tools in `script/` and `scripts/` may print their reports ([#143](https://github.com/tinkerologie/unraid-api/issues/143)).
+- **`scripts/validate-schema.py` schema source** — By default the validator now uses the upstream SDL for the server's reported API version, because Unraid API 4.37.8+ refuses introspection. Live introspection is still available with `--introspect`. Operation extraction moved to the shared `script/schema_tools.py`, which renders capability-gated queries instead of dropping their interpolated fields ([#136](https://github.com/tinkerologie/unraid-api/issues/136)).
 
 ## [1.14.2] - 2026-10-30
 

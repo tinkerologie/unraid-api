@@ -1,0 +1,167 @@
+name: Upstream watch
+
+# Watches unraid/api releases and api/generated-schema.graphql (at release
+# tags and at main) for changes that affect this library, and opens
+# deduplicated `bug`/`enhancement` + `upstream` issues. See CONTRIBUTING.md.
+
+on:
+  schedule:
+    - cron: 0 2 1,15 * *
+      timezone: Australia/Brisbane
+  workflow_dispatch:
+    inputs:
+      since:
+        description: Base release tag, e.g. v4.37.6 (empty uses the last recorded release)
+        required: false
+        type: string
+      until:
+        description: Last release tag to process (empty uses the latest release)
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the repository
+      issues: read # read the hidden markers in existing issues
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # actions/setup-python has no 3.14.2 build for the Ubuntu 26.04 runner.
+      - name: Install uv and Python 3.14.2
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.14.2"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras
+
+      - name: Scan unraid/api
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SINCE: ${{ inputs.since }}
+          UNTIL: ${{ inputs.until }}
+        run: >-
+          uv run --frozen --all-extras python script/upstream_watch.py scan
+          --since "$SINCE" --until "$UNTIL" --output report.json
+
+      - name: Upload report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upstream-watch-report
+          path: report.json
+          if-no-files-found: error
+          retention-days: 30
+
+  report:
+    name: Report
+    needs: scan
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write # create labels and issues, and update the state issue
+
+    steps:
+      - name: Download report
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: upstream-watch-report
+
+      - name: Open issues and record state
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('report.json', 'utf8'));
+            const { owner, repo } = context.repo;
+            const BOT = 'github-actions[bot]';
+            const STATE_TITLE = 'Upstream watch state';
+
+            // Paginated listing, never the search API (it lags). Closed
+            // issues count; only bot-authored markers are trusted.
+            const all = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'all', per_page: 100,
+            });
+            const botIssues = all.filter(
+              (issue) => !issue.pull_request && issue.user?.login === BOT,
+            );
+            const groups = new Map();
+            for (const issue of botIssues) {
+              for (const match of (issue.body || '').matchAll(/<!-- upstream-group: (\S+) -->/g)) {
+                if (!groups.has(match[1])) groups.set(match[1], issue);
+              }
+            }
+
+            const labels = {
+              bug: ['d73a4a', "Something isn't working"],
+              enhancement: ['a2eeef', 'New feature or request'],
+              upstream: ['5319e7', 'Change in unraid/api'],
+            };
+            for (const [name, [color, description]] of Object.entries(labels)) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({ owner, repo, name, color, description });
+              }
+            }
+
+            const links = [];
+            for (const payload of report.issues) {
+              const existing = groups.get(payload.group);
+              if (existing) {
+                links.push(`- ${payload.title}: already reported in #${existing.number}`);
+                continue;
+              }
+              const { data } = await github.rest.issues.create({
+                owner, repo, title: payload.title, body: payload.body, labels: payload.labels,
+              });
+              links.push(`- Created #${data.number}: ${payload.title}`);
+            }
+
+            const release = report.state.upstream_release;
+            const main = report.state.upstream_main;
+            if (!/^v\d+\.\d+\.\d+$/.test(release) || !/^[0-9a-f]{40}$/.test(main)) {
+              throw new Error(`Invalid state in report: ${release} ${main}`);
+            }
+            const stateBody = [
+              `<!-- upstream-release: ${release} -->`,
+              `<!-- upstream-main: ${main} -->`,
+              '',
+              `Last unraid/api release processed by the Upstream watch workflow: ${release}.`,
+              `Last unraid/api main commit checked: ${main}.`,
+              '',
+              'The workflow updates this issue. Keep it closed.',
+            ].join('\n');
+            const state = botIssues.find((issue) => issue.title === STATE_TITLE);
+            if (state) {
+              await github.rest.issues.update({
+                owner, repo, issue_number: state.number, body: stateBody,
+                state: 'closed', labels: ['upstream'],
+              });
+            } else {
+              const { data } = await github.rest.issues.create({
+                owner, repo, title: STATE_TITLE, body: stateBody, labels: ['upstream'],
+              });
+              await github.rest.issues.update({
+                owner, repo, issue_number: data.number, state: 'closed', state_reason: 'completed',
+              });
+            }
+
+            await core.summary
+              .addRaw(report.summary_markdown)
+              .addHeading('Issues', 2)
+              .addRaw(links.length ? links.join('\n') : 'None.')
+              .addEOL()
+              .write();
