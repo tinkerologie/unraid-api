@@ -68,9 +68,10 @@ jobs:
   report:
     name: Report
     needs: scan
-    # Only runs on main open issues and record state; a dispatch from a
-    # branch only scans (the report artifact and job summary still show it).
-    if: github.ref == 'refs/heads/main'
+    # Writes only to this repository: never to unraid/api, never from a fork,
+    # and only from main (a branch dispatch only scans; the report artifact and
+    # job summary still show the result).
+    if: github.repository == 'tinkerologie/unraid-api' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       issues: write # create labels and issues, and update the state issue
@@ -88,6 +89,10 @@ jobs:
             const fs = require('fs');
             const report = JSON.parse(fs.readFileSync('report.json', 'utf8'));
             const { owner, repo } = context.repo;
+            // Never post upstream: issues and labels go to this repository only.
+            if (`${owner}/${repo}` !== 'tinkerologie/unraid-api') {
+              throw new Error(`Refusing to write issues to ${owner}/${repo}`);
+            }
             const BOT = 'github-actions[bot]';
             const STATE_TITLE = 'Upstream watch state';
 

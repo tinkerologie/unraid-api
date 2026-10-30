@@ -111,6 +111,11 @@ The `Upstream watch` workflow (`.github/workflows/upstream-watch.yml`) tracks
 at 02:00 Australia/Brisbane on the 1st and 15th of each month, and on demand from the Actions tab
 (`workflow_dispatch`, with optional `since`/`until` release tags).
 
+It never writes to unraid/api: the scan only reads public data, issues are opened only in this
+repository (the report job refuses any other repository and runs only on `main` here), and
+upstream PR links go through `redirect.github.com`, so GitHub adds no "mentioned this" entries
+to upstream issues or PRs.
+
 - **Scan job** (read-only): `script/upstream_watch.py scan` diffs `api/generated-schema.graphql`
   between consecutive new release tags and from the latest release to `main`, validates every
   library operation against each new schema with `graphql.validate`, maps changed fields to the
