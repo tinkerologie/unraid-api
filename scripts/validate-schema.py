@@ -1138,8 +1138,6 @@ def run_schema_checks(
     if args.dump_schema:
         dump_schema(schema_types)
     print_schema_summary(schema_types)
-    if args.live_only:
-        return [], []
     if schema is not None:
         print("\n→ Validating every library operation with graphql.validate...")
         query_issues = validate_sdl(schema)
@@ -1239,17 +1237,24 @@ async def main() -> int:
         except Exception as e:
             print(f"WARNING: Could not get server version: {e}")
 
-        schema: GraphQLSchema | None = None
-        if args.introspect:
-            print("\n→ Introspecting live GraphQL schema...")
-            schema_types = await introspect_schema(client)
-        else:
-            schema = load_schema_source(args, api_version)
-            if schema is None:
-                return 1
-            schema_types = schema_types_from_graphql(schema)
+        query_issues: list[ValidationIssue] = []
+        model_issues: list[ValidationIssue] = []
+        # --live-only discards schema results, so never let a missing or
+        # unknown schema stop the live method tests.
+        if not args.live_only:
+            schema: GraphQLSchema | None = None
+            if args.introspect:
+                print("\n→ Introspecting live GraphQL schema...")
+                schema_types = await introspect_schema(client)
+            else:
+                schema = load_schema_source(args, api_version)
+                if schema is None:
+                    return 1
+                schema_types = schema_types_from_graphql(schema)
 
-        query_issues, model_issues = run_schema_checks(schema, schema_types, args)
+            query_issues, model_issues = run_schema_checks(
+                schema, schema_types, args
+            )
 
         if not args.schema_only:
             # Run live method tests

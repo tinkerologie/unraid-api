@@ -173,6 +173,26 @@ class TestDefaultSource:
         assert await _run(monkeypatch, "--schema-only") == 1
         assert "404" in capsys.readouterr().out
 
+    async def test_live_only_skips_schema_loading(
+        self, monkeypatch: pytest.MonkeyPatch, server: SimpleNamespace, capsys: Any
+    ) -> None:
+        server.get_version.return_value = SimpleNamespace(
+            unraid="7.3", api="4.38.0-beta.1"
+        )
+        fetch = MagicMock()
+        introspect = AsyncMock()
+        live = AsyncMock(return_value=[])
+        monkeypatch.setattr(vs, "https_get", fetch)
+        monkeypatch.setattr(vs, "introspect_schema", introspect)
+        monkeypatch.setattr(vs, "run_live_method_tests", live)
+        assert await _run(monkeypatch, "--live-only") == 0
+        live.assert_awaited_once()
+        fetch.assert_not_called()
+        assert await _run(monkeypatch, "--live-only", "--introspect") == 0
+        introspect.assert_not_awaited()
+        assert live.await_count == 2
+        assert "Running live method tests" in capsys.readouterr().out
+
     @pytest.mark.usefixtures("server")
     async def test_introspect_keeps_the_live_path(
         self, monkeypatch: pytest.MonkeyPatch

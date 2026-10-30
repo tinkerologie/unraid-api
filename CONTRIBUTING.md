@@ -123,9 +123,9 @@ at 02:00 Australia/Brisbane on the 1st and 15th of each month, and on demand fro
 
 **Labels.** Breaking changes (an operation no longer validates; a field or root the library
 selects was removed or became nullable; or an input type or enum the library sends in variables
-lost a field or value, changed a field's type, or gained a required field) and behaviour changes
-open a `bug` + `upstream` issue. New
-types, fields and root fields, and new deprecations, open an `enhancement` + `upstream` issue. The
+lost a field or value, changed a field's type, or gained a required field or lost a default on a
+non-null field) and behaviour changes open a `bug` + `upstream` issue. New types, fields and root
+fields, and new deprecations, open an `enhancement` + `upstream` issue. The
 job creates a missing label before use, and sets labels in the create call, because issues opened
 with `GITHUB_TOKEN` do not trigger the issue labeler.
 

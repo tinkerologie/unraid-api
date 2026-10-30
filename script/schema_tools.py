@@ -572,6 +572,9 @@ def build_inventory(
 # =============================================================================
 
 
+_SUGGESTION_RE = re.compile(r"\s*Did you mean .*\?$", re.DOTALL)
+
+
 @dataclass(frozen=True)
 class ValidationFailure:
     """A library operation that does not validate against a schema."""
@@ -582,8 +585,17 @@ class ValidationFailure:
     document: str
 
     @property
+    def stable_message(self) -> str:
+        """The message without "Did you mean ...?" suggestions.
+
+        graphql-core suggests names from the whole schema, so an unrelated
+        addition would otherwise change the message of a known failure.
+        """
+        return _SUGGESTION_RE.sub("", self.message)
+
+    @property
     def key(self) -> tuple[str, str]:
-        return (self.document.strip(), self.message)
+        return (self.document.strip(), self.stable_message)
 
 
 def validate_operation(schema: GraphQLSchema, document: str) -> list[str]:
@@ -888,12 +900,7 @@ def _diff_input_fields(
         changes.append(SchemaChange("input_field_removed", f"{type_name}.{name}"))
     for name in new_fields.keys() - old_fields.keys():
         new_field = new_fields[name]
-        # graphql-core 3.3 keeps SDL defaults in `default`; 3.2 in `default_value`.
-        has_default = (
-            getattr(new_field, "default", None) is not None
-            or new_field.default_value is not Undefined
-        )
-        required = is_non_null_type(new_field.type) and not has_default
+        required = is_non_null_type(new_field.type) and not _has_default(new_field)
         changes.append(
             SchemaChange(
                 "input_field_added",
@@ -903,14 +910,34 @@ def _diff_input_fields(
             )
         )
     for name in old_fields.keys() & new_fields.keys():
-        before, after = str(old_fields[name].type), str(new_fields[name].type)
+        old_field, new_field = old_fields[name], new_fields[name]
+        before, after = str(old_field.type), str(new_field.type)
         if before != after:
             changes.append(
                 SchemaChange(
                     "input_field_type_changed", f"{type_name}.{name}", before, after
                 )
             )
+        elif (
+            is_non_null_type(new_field.type)
+            and _has_default(old_field)
+            and not _has_default(new_field)
+        ):
+            # The field becomes mandatory for callers that omitted it.
+            changes.append(
+                SchemaChange(
+                    "input_field_default_removed", f"{type_name}.{name}", after=after
+                )
+            )
     return changes
+
+
+def _has_default(input_field: Any) -> bool:
+    # graphql-core 3.3 keeps SDL defaults in `default`; 3.2 in `default_value`.
+    return (
+        getattr(input_field, "default", None) is not None
+        or input_field.default_value is not Undefined
+    )
 
 
 def _diff_enum(

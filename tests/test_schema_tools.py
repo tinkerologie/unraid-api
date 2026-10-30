@@ -309,6 +309,31 @@ class TestInputUsage:
         assert index["Unit"].methods == {"update"}
         assert index["ConfigInput"].locations == {"lib.py:4"}
 
+    def test_default_removed_from_non_null_input_field(self) -> None:
+        changes = st.diff_schemas(
+            st.load_sdl(
+                "type Query { a(i: I): Int }\n"
+                "input I { forced: Boolean! = false keep: Boolean! = false\n"
+                "  nullable: Boolean = false }"
+            ),
+            st.load_sdl(
+                "type Query { a(i: I): Int }\n"
+                "input I { forced: Boolean! keep: Boolean! = false nullable: Boolean }"
+            ),
+        )
+        assert [c.id for c in changes] == [
+            "input_field_default_removed:I.forced:..Boolean!"
+        ]
+
+    def test_validation_identity_ignores_suggestions(self) -> None:
+        failure = st.ValidationFailure(
+            ("m",), ("x:1",), "Unknown type 'Foo'. Did you mean 'FooV2'?", " q "
+        )
+        assert failure.stable_message == "Unknown type 'Foo'."
+        assert failure.key == ("q", "Unknown type 'Foo'.")
+        bare = st.ValidationFailure(("m",), ("x:1",), "Unknown type 'Foo'.", "q")
+        assert bare.key == failure.key
+
     def test_required_input_fields_are_marked(self) -> None:
         changes = st.diff_schemas(
             st.load_sdl("type Query { a(i: I): Int } input I { x: Int }"),

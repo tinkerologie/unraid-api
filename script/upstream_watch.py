@@ -99,7 +99,12 @@ BEHAVIOUR_RULES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 BREAKING_KINDS = frozenset({"field_removed", "field_nullable", "field_type_changed"})
 # Breaking when the input object or enum type is sent in a library variable.
 INPUT_BREAKING_KINDS = frozenset(
-    {"input_field_removed", "input_field_type_changed", "enum_value_removed"}
+    {
+        "input_field_removed",
+        "input_field_type_changed",
+        "input_field_default_removed",
+        "enum_value_removed",
+    }
 )
 ENHANCEMENT_KINDS = frozenset({"type_added", "field_added", "root_field_added"})
 CHANGE_LABELS = {
@@ -117,6 +122,7 @@ CHANGE_LABELS = {
     "input_field_added": "input field added",
     "input_field_removed": "input field removed",
     "input_field_type_changed": "input field type changed",
+    "input_field_default_removed": "input field default removed (now required)",
     "enum_value_added": "enum value added",
     "enum_value_removed": "enum value removed",
     "deprecation_field": "field deprecated",
@@ -493,7 +499,7 @@ def analyse_step(
         item = _change_entry(change, "bug", None)
         item["id"] = (
             f"validation_error:{change.coordinate}:"
-            f"{_short_hash(failure.document.strip() + failure.message)}"
+            f"{_short_hash(failure.document.strip() + failure.stable_message)}"
         )
         item["selected"] = True
         item["methods"] = list(failure.methods)

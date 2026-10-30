@@ -476,10 +476,11 @@ class TestInputBreakage:
         "}\n"
         "input TemperatureConfigInput {\n"
         "  enabled: Boolean sensor: SensorInput unit: Unit retype: Int\n"
+        "  forced: Boolean! = false\n"
         "}\n"
         "input SensorInput { id: ID }\n"
         "enum Unit { C F }\n"
-        "input Unused { x: Int }\n"
+        "input Unused { x: Int z: Int! = 1 }\n"
         "enum Mode { A B }\n"
     )
     NEW = (
@@ -489,10 +490,11 @@ class TestInputBreakage:
         "}\n"
         "input TemperatureConfigInput {\n"
         "  sensor: SensorInput unit: Unit retype: String\n"
+        "  forced: Boolean!\n"
         "}\n"
         "input SensorInput { id: ID required: Int! optional: Int! = 1 }\n"
         "enum Unit { C }\n"
-        "input Unused { y: Int }\n"
+        "input Unused { y: Int z: Int! }\n"
         "enum Mode { A }\n"
     )
 
@@ -526,6 +528,8 @@ class TestInputBreakage:
             "Unit.F": "bug",
             "Unused.x": "no_action",
             "Unused.y": "no_action",
+            "TemperatureConfigInput.forced": "bug",
+            "Unused.z": "no_action",
             "Mode.B": "no_action",
         }
         removed = _change(entry, "TemperatureConfigInput.enabled")
@@ -536,6 +540,41 @@ class TestInputBreakage:
         bug = next(i for i in report["issues"] if i["group"] == "v4.37.7:bug")
         assert "`TemperatureConfigInput.enabled`: input field removed" in bug["body"]
         assert "`update_temperature_config`" in bug["body"]
+
+
+class TestValidationIdentity:
+    def test_new_suggestions_do_not_create_new_failures(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "lib.py").write_text(
+            "class Client:\n"
+            "    def create_api_key(self):\n"
+            '        return """mutation ($input: ApiKeyCreateInput!) {\n'
+            "            create(input: $input)\n"
+            '        }"""\n'
+        )
+
+        def fake_inventory(schema: Any) -> st.Inventory:
+            return st.build_inventory(
+                schema, root=tmp_path, sources=("lib.py",), registry=()
+            )
+
+        monkeypatch.setattr(uw, "build_inventory", fake_inventory)
+        old = "type Query { a: Int }\ntype Mutation { create(input: Other): Int }\n"
+        old += "input Other { a: Int }\n"
+        # An unrelated addition makes graphql-core suggest the new name.
+        new = old + "input ApiKeyCreateInputV2 { a: Int }\n"
+        schemas = {"v4.37.6": old, "v4.37.7": new, MAIN_SHA: new}
+        releases = [r for r in GITHUB["releases"] if r["tag_name"] <= "v4.37.7"]
+        report = uw.scan(FakeGitHub(releases=releases, schemas=schemas), REPO)
+
+        new_failures = st.validate_inventory(
+            st.load_sdl(new), fake_inventory(st.load_sdl(new))
+        )
+        assert any("Did you mean" in f.message for f in new_failures)
+        entry = _entry(report, "v4.37.7")
+        assert [c["kind"] for c in entry["changes"]] == ["type_added"]
+        assert [i["group"] for i in report["issues"]] == ["v4.37.7:enhancement"]
 
 
 class TestClassification:
@@ -577,6 +616,12 @@ class TestClassification:
             ),
             (st.SchemaChange("enum_value_removed", "In.V"), True, "bug"),
             (st.SchemaChange("type_removed", "In"), True, "bug"),
+            (st.SchemaChange("input_field_default_removed", "In.f"), True, "bug"),
+            (
+                st.SchemaChange("input_field_default_removed", "Z.f"),
+                False,
+                "no_action",
+            ),
         ],
     )
     def test_classify(
