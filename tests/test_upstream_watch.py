@@ -597,6 +597,8 @@ class TestClassification:
             (st.SchemaChange("root_field_added", "Query.z"), False, "enhancement"),
             (st.SchemaChange("deprecation_field", "A.b"), True, "enhancement"),
             (st.SchemaChange("deprecation_enum_value", "E.V"), False, "enhancement"),
+            (st.SchemaChange("deprecation_input_field", "In.f"), True, "enhancement"),
+            (st.SchemaChange("deprecation_input_field", "Z.f"), False, "enhancement"),
             (st.SchemaChange("arg_removed", "A.b(x:)"), True, "no_action"),
             (st.SchemaChange("enum_value_removed", "E.V"), False, "no_action"),
             (st.SchemaChange("input_field_added", "I.x"), False, "no_action"),

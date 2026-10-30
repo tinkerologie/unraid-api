@@ -128,6 +128,7 @@ CHANGE_LABELS = {
     "deprecation_field": "field deprecated",
     "deprecation_arg": "argument deprecated",
     "deprecation_enum_value": "enum value deprecated",
+    "deprecation_input_field": "input field deprecated",
     "validation_error": "operation no longer validates",
 }
 
@@ -394,7 +395,8 @@ def classify(
     if change.kind in BREAKING_KINDS:
         return ("bug" if selection else "no_action"), selection
     if change.kind in ENHANCEMENT_KINDS or change.kind.startswith("deprecation_"):
-        return "enhancement", selection
+        # Flag deprecations the library selects, or sends in its variables.
+        return "enhancement", selection or usage
     return "no_action", selection
 
 

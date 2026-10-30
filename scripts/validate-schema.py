@@ -654,18 +654,32 @@ def validate_sdl(schema: GraphQLSchema) -> list[ValidationIssue]:
     ]
 
 
-def inventory_as_queries() -> list[ExtractedQuery]:
-    """The operation inventory in the shape the introspection validator uses."""
-    return [
-        ExtractedQuery(
-            method_name=", ".join(op.methods),
-            operation_type=op.operation_type,
-            query_string=op.document,
-            line_number=op.origins[0].line,
-            path=op.origins[0].path,
+_INTROSPECTION_RE = re.compile(r"\b__(?:type|schema)\s*[({]")
+
+
+def inventory_as_queries() -> tuple[list[ExtractedQuery], int]:
+    """The operation inventory in the shape the introspection validator uses.
+
+    Introspection operations (selecting `__type`/`__schema`) are left out:
+    the legacy field checker cannot resolve meta-fields, and they are valid
+    on every GraphQL server. Returns the queries and how many were skipped.
+    """
+    queries: list[ExtractedQuery] = []
+    skipped = 0
+    for op in build_inventory().operations:
+        if _INTROSPECTION_RE.search(op.document):
+            skipped += 1
+            continue
+        queries.append(
+            ExtractedQuery(
+                method_name=", ".join(op.methods),
+                operation_type=op.operation_type,
+                query_string=op.document,
+                line_number=op.origins[0].line,
+                path=op.origins[0].path,
+            )
         )
-        for op in build_inventory().operations
-    ]
+    return queries, skipped
 
 
 def dump_schema(schema_types: dict[str, SchemaType]) -> None:
@@ -1143,8 +1157,11 @@ def run_schema_checks(
         query_issues = validate_sdl(schema)
     else:
         print("\n→ Extracting GraphQL operations from client source...")
-        queries = inventory_as_queries()
-        print(f"  {len(queries)} unique operations")
+        queries, skipped = inventory_as_queries()
+        print(
+            f"  {len(queries)} unique operations"
+            f" ({skipped} introspection operations skipped)"
+        )
         print("\n→ Validating query fields against live schema...")
         query_issues = validate_queries(queries, schema_types)
     print("\n→ Comparing Pydantic models to schema types...")

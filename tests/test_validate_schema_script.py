@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import schema_tools as st
+from unraid_api.capabilities import build_introspection_query
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).parent / "fixtures" / "upstream"
@@ -206,6 +207,26 @@ class TestDefaultSource:
         monkeypatch.setattr(vs, "https_get", fetch)
         assert await _run(monkeypatch, "--introspect", "--schema-only") == 0
         fetch.assert_not_called()
+
+    @pytest.mark.usefixtures("server")
+    async def test_introspect_skips_introspection_operations(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        types = vs.schema_types_from_graphql(st.load_sdl(SDL))
+        monkeypatch.setattr(vs, "introspect_schema", AsyncMock(return_value=types))
+        monkeypatch.setattr(
+            vs,
+            "build_inventory",
+            lambda: _inventory(
+                build_introspection_query(),
+                "query { __schema { queryType { name } } }",
+                "query { online }",
+            ),
+        )
+        assert await _run(monkeypatch, "--introspect", "--schema-only") == 0
+        out = capsys.readouterr().out
+        assert "ERROR(s)" not in out
+        assert "1 unique operations (2 introspection operations skipped)" in out
 
 
 class TestAdapter:

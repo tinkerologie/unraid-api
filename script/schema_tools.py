@@ -911,6 +911,14 @@ def _diff_input_fields(
         )
     for name in old_fields.keys() & new_fields.keys():
         old_field, new_field = old_fields[name], new_fields[name]
+        if new_field.deprecation_reason and not old_field.deprecation_reason:
+            changes.append(
+                SchemaChange(
+                    "deprecation_input_field",
+                    f"{type_name}.{name}",
+                    detail=new_field.deprecation_reason,
+                )
+            )
         before, after = str(old_field.type), str(new_field.type)
         if before != after:
             changes.append(

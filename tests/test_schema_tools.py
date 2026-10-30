@@ -309,6 +309,22 @@ class TestInputUsage:
         assert index["Unit"].methods == {"update"}
         assert index["ConfigInput"].locations == {"lib.py:4"}
 
+    def test_input_field_deprecations_are_diffed(self) -> None:
+        changes = st.diff_schemas(
+            st.load_sdl(
+                "type Query { a(i: I): Int }\n"
+                'input I { forced: Boolean old: Int @deprecated(reason: "x") }'
+            ),
+            st.load_sdl(
+                "type Query { a(i: I): Int }\n"
+                'input I { forced: Boolean @deprecated(reason: "Ignored")\n'
+                '  old: Int @deprecated(reason: "x") }'
+            ),
+        )
+        assert [(c.id, c.detail) for c in changes] == [
+            ("deprecation_input_field:I.forced", "Ignored")
+        ]
+
     def test_default_removed_from_non_null_input_field(self) -> None:
         changes = st.diff_schemas(
             st.load_sdl(
