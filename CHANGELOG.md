@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.2] - 2026-10-30
+
+### Fixed
+
+- **Key management mutations** — The create, update and delete methods for API keys (`create_api_key()`, `update_api_key()`, `delete_api_keys()`) used input type names the server does not define, so every server rejected them. They now use the schema types CreateApiKeyInput, UpdateApiKeyInput and DeleteApiKeyInput; the sent fields and return values are unchanged ([#138](https://github.com/tinkerologie/unraid-api/issues/138)).
+- **`move_docker_entries_to_folder()`** — declared `$destinationFolderId` as nullable where the server requires `String!`, so every call was rejected. `None` (the default) now moves entries to Unraid's default organizer root folder, `"root"`, and a blank folder ID raises `ValueError` before any request ([#138](https://github.com/tinkerologie/unraid-api/issues/138)).
+- **`update_server_identity()`** — declared `$name` as nullable where the server requires `String!`. `name` is now a required parameter (pass the current name to change only the comment or model), and a blank name raises `ValueError` before any request. Calls without a name never succeeded ([#138](https://github.com/tinkerologie/unraid-api/issues/138)).
+
+### Added
+
+- **Schema contract tests** — `tests/test_schema_contract.py` validates these mutations' documents and coerces their variables against the pinned upstream schema (`tests/fixtures/unraid-api-v4.37.9.graphql`) with `graphql-core`, now a development dependency ([#138](https://github.com/tinkerologie/unraid-api/issues/138)).
+
 ## [1.14.1] - 2026-10-30
 
 ### Fixed
@@ -543,7 +555,8 @@ Return dict/list for flexible access:
 - `PhysicalDisk`
 - `Notification`, `NotificationOverview`
 
-[Unreleased]: https://github.com/tinkerologie/unraid-api/compare/v1.14.1...HEAD
+[Unreleased]: https://github.com/tinkerologie/unraid-api/compare/v1.14.2...HEAD
+[1.14.2]: https://github.com/tinkerologie/unraid-api/compare/v1.14.1...v1.14.2
 [1.14.1]: https://github.com/tinkerologie/unraid-api/compare/v1.14.0...v1.14.1
 [1.14.0]: https://github.com/tinkerologie/unraid-api/compare/v1.13.2...v1.14.0
 [1.13.2]: https://github.com/tinkerologie/unraid-api/compare/v1.13.1...v1.13.2
