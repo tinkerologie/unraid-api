@@ -8500,6 +8500,7 @@ async def test_ordinary_query_still_caches_post_redirect_destination() -> None:
     redirect.status = 307
     redirect.headers = {"Location": "https://unraid.test/graphql"}
     response = MagicMock()
+    response.status = 200
     response.json = AsyncMock(return_value={"data": {"online": True}})
     first = MagicMock()
     first.__aenter__ = AsyncMock(return_value=redirect)

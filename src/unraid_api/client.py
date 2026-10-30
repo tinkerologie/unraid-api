@@ -83,10 +83,22 @@ _LOGGER = logging.getLogger(__name__)
 
 # HTTP status codes
 HTTP_OK = 200
+HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
+HTTP_SERVER_ERROR = 500
 DEFAULT_HTTP_PORT = 80
 DEFAULT_HTTPS_PORT = 443
+
+
+def _is_introspection_disabled(err: UnraidAPIError) -> bool:
+    """Return whether the server refused a request as schema introspection."""
+    return any(
+        isinstance(e, dict)
+        and isinstance(e.get("extensions"), dict)
+        and e["extensions"].get("code") == "INTROSPECTION_DISABLED"
+        for e in err.errors
+    )
 
 
 class UnraidClient:
@@ -678,6 +690,14 @@ class UnraidClient:
                             allow_redirects=False,
                             **request_options,
                         ) as redirect_response:
+                            if (
+                                HTTP_BAD_REQUEST
+                                <= redirect_response.status
+                                < HTTP_SERVER_ERROR
+                            ):
+                                await self._raise_for_graphql_rejection(
+                                    redirect_response
+                                )
                             redirect_response.raise_for_status()
                             result: dict[str, Any] = await redirect_response.json()
                             return result
@@ -690,6 +710,8 @@ class UnraidClient:
                         "Invalid API key or insufficient permissions"
                     )
 
+                if HTTP_BAD_REQUEST <= response.status < HTTP_SERVER_ERROR:
+                    await self._raise_for_graphql_rejection(response)
                 response.raise_for_status()
                 json_result: dict[str, Any] = await response.json()
                 return json_result
@@ -711,6 +733,27 @@ class UnraidClient:
             raise UnraidAPIError(f"HTTP error {err.status}: {err.message}") from err
         except aiohttp.ClientError as err:
             raise UnraidConnectionError(f"Connection failed: {err}") from err
+
+    @staticmethod
+    async def _raise_for_graphql_rejection(response: aiohttp.ClientResponse) -> None:
+        """Raise the GraphQL errors of a 4xx response, keeping their codes.
+
+        Unraid API 4.37.8+ rejects some operations before execution, e.g.
+        schema introspection with ``extensions.code`` ``INTROSPECTION_DISABLED``.
+        Returns without raising when the body has no GraphQL errors, or for
+        401/403, so the caller's authentication and HTTP error handling applies.
+        """
+        if response.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+            return
+        try:
+            body = await response.json(content_type=None)
+        except (aiohttp.ContentTypeError, ValueError):
+            return
+        errors = body.get("errors") if isinstance(body, dict) else None
+        if isinstance(errors, list) and errors:
+            raise UnraidAPIError(
+                f"GraphQL request rejected (HTTP {response.status})", errors=errors
+            )
 
     async def query(
         self, query: str, variables: dict[str, Any] | None = None
@@ -765,7 +808,10 @@ class UnraidClient:
 
             _LOGGER.debug("GraphQL returned %d error(s)", len(errors))
 
-            if data:
+            # Since Unraid API 4.37.8 the docker and vms roots are nullable, so a
+            # failed service returns {"docker": null} with errors instead of
+            # data: null. Nothing usable came back when every root is null.
+            if isinstance(data, dict) and any(v is not None for v in data.values()):
                 # Partial failure - log and return data
                 _LOGGER.debug(
                     "Some optional features unavailable: %s",
@@ -838,6 +884,23 @@ class UnraidClient:
                 response = await self.query(build_introspection_query())
             except UnraidAuthenticationError:
                 raise
+            except UnraidAPIError as err:
+                if not _is_introspection_disabled(err):
+                    _LOGGER.debug(
+                        "Capability introspection failed (%s); "
+                        "falling back to permissive",
+                        err,
+                    )
+                    self._capabilities = ServerCapabilities.permissive()
+                    return self._capabilities
+                # Only Unraid API 4.37.8+ refuses introspection, so the server
+                # has every current field; fields retired upstream are absent.
+                _LOGGER.debug(
+                    "Server disables introspection (Unraid API 4.37.8+); "
+                    "assuming current capabilities"
+                )
+                self._capabilities = ServerCapabilities.introspection_disabled()
+                return self._capabilities
             except Exception as err:
                 _LOGGER.debug(
                     "Capability introspection failed (%s); falling back to permissive",
@@ -1434,7 +1497,7 @@ class UnraidClient:
         caps = await self.get_capabilities()
         query_str = self._build_containers_query(caps)
         result = await self.query(query_str)
-        containers = result.get("docker", {}).get("containers", []) or []
+        containers = (result.get("docker") or {}).get("containers", []) or []
         return [DockerContainer.from_api_response(c) for c in containers]
 
     def _build_containers_query(self, caps: ServerCapabilities) -> str:
@@ -1566,7 +1629,7 @@ class UnraidClient:
         caps = await self.get_capabilities()
         query_str = self._build_containers_query_safe(caps)
         result = await self.query(query_str)
-        containers = result.get("docker", {}).get("containers", []) or []
+        containers = (result.get("docker") or {}).get("containers", []) or []
         return [DockerContainer.from_api_response(c) for c in containers]
 
     def _build_containers_query_safe(self, caps: ServerCapabilities) -> str:
@@ -1644,7 +1707,7 @@ class UnraidClient:
             }}
         """
         result = await self.query(query_str)
-        domains = result.get("vms", {}).get("domains", []) or []
+        domains = (result.get("vms") or {}).get("domains", []) or []
         return [VmDomain(**vm) for vm in domains]
 
     async def typed_get_ups_devices(self) -> list[UPSDevice]:
@@ -1803,7 +1866,7 @@ class UnraidClient:
             }
         """
         result = await self.query(query_str)
-        statuses = result.get("docker", {}).get("containerUpdateStatuses", []) or []
+        statuses = (result.get("docker") or {}).get("containerUpdateStatuses", []) or []
         return [ContainerUpdateStatus(**s) for s in statuses]
 
     async def get_ups_configuration(self) -> UPSConfiguration:
@@ -1895,7 +1958,7 @@ class UnraidClient:
             }
         """
         result = await self.query(query_str)
-        conflicts_data = result.get("docker", {}).get("portConflicts", {}) or {}
+        conflicts_data = (result.get("docker") or {}).get("portConflicts", {}) or {}
         return DockerPortConflicts(**conflicts_data)
 
     async def get_notification_overview(self) -> NotificationOverview:
@@ -2458,7 +2521,7 @@ class UnraidClient:
             }
         """
         result = await self.query(query_str)
-        return list(result.get("docker", {}).get("containers", []))
+        return list((result.get("docker") or {}).get("containers", []))
 
     # =========================================================================
     # Additional VM Methods
@@ -2559,7 +2622,7 @@ class UnraidClient:
             }
         """
         result = await self.query(query_str)
-        return list(result.get("vms", {}).get("domains", []) or [])
+        return list((result.get("vms") or {}).get("domains", []) or [])
 
     # =========================================================================
     # System Metrics Methods
@@ -3378,7 +3441,7 @@ class UnraidClient:
             }
         """
         result = await self.query(query_str)
-        return list(result.get("docker", {}).get("networks", []))
+        return list((result.get("docker") or {}).get("networks", []))
 
     async def typed_get_docker_networks(self) -> list[DockerNetwork]:
         """Get Docker networks as Pydantic models.
@@ -3932,7 +3995,7 @@ class UnraidClient:
         if since is not None:
             variables["since"] = since
         result = await self.query(query, variables)
-        logs: dict[str, Any] = dict(result.get("docker", {}).get("logs", {}))
+        logs: dict[str, Any] = dict((result.get("docker") or {}).get("logs", {}))
         return logs
 
     async def typed_get_container_logs(

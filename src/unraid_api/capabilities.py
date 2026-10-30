@@ -35,6 +35,16 @@ CAPABILITY_TYPES: tuple[str, ...] = (
 )
 
 
+# Fields removed upstream. A server that refuses introspection (Unraid API
+# 4.37.8+) is newer than every removal listed here.
+RETIRED_FIELDS: frozenset[str] = frozenset(
+    {
+        # Direct array disk removal, retired after v4.36.0 (unraid/api#2068).
+        "ArrayMutations.removeDiskFromArray",
+    }
+)
+
+
 def build_introspection_query() -> str:
     """Single aliased __type query covering every capability-relevant type."""
     fragments = []
@@ -51,7 +61,7 @@ def build_introspection_query() -> str:
 class ServerCapabilities:
     """Typed view over which GraphQL fields a specific server exposes."""
 
-    __slots__ = ("_fields", "_permissive")
+    __slots__ = ("_current", "_fields", "_permissive")
 
     def __init__(
         self,
@@ -61,6 +71,7 @@ class ServerCapabilities:
     ) -> None:
         self._fields: dict[str, frozenset[str]] = dict(fields)
         self._permissive = permissive
+        self._current = False
 
     @property
     def is_permissive(self) -> bool:
@@ -70,6 +81,18 @@ class ServerCapabilities:
     def permissive(cls) -> ServerCapabilities:
         """Fallback when introspection fails — assume every feature is present."""
         return cls({}, permissive=True)
+
+    @classmethod
+    def introspection_disabled(cls) -> ServerCapabilities:
+        """Capabilities of a server that refuses introspection (API 4.37.8+).
+
+        Such a server has every field this client knows except those retired
+        upstream. Unlike `permissive()` it is a known, current server, so
+        optional fields such as `VmDomain.uuid` are requested.
+        """
+        caps = cls({})
+        caps._current = True
+        return caps
 
     @classmethod
     def from_introspection_response(
@@ -90,6 +113,8 @@ class ServerCapabilities:
         """Check whether a dotted path (`TypeName.fieldName`) exists on the server."""
         if self._permissive:
             return True
+        if self._current:
+            return path not in RETIRED_FIELDS
         if "." not in path:
             raise ValueError(
                 f"Capability path must be dotted (TypeName.fieldName), got {path!r}"

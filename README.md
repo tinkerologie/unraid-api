@@ -273,6 +273,13 @@ the fallback. If introspection fails, permissive capabilities optimistically
 attempt native restart. `typed_get_vms()` requests `uuid` only when introspection confirms support;
 unknown schemas omit it to preserve VM listing.
 
+Unraid API 4.37.8 and later refuse schema introspection unless the developer
+sandbox is enabled. The client recognises the `INTROSPECTION_DISABLED` response
+and treats the server as current: every field is available except those in
+`RETIRED_FIELDS`, so VM UUIDs are still requested. On these servers a failed
+Docker or VM service raises `UnraidAPIError`; the readers never return an empty
+list for it.
+
 Plugin and language installs modify the server. Follow their returned operation
 with `subscribe_plugin_install_updates(operation.id)`. `remove_array_disk()`
 emits `DeprecationWarning` and rejects servers without the retired mutation;
