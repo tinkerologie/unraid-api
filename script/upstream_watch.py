@@ -515,6 +515,25 @@ def analyse_step(
 # =============================================================================
 
 
+# GitHub records a cross-reference ("mentioned this") on an upstream issue or PR
+# whenever an issue here names it as `owner/repo#N` or links its github.com URL.
+# Links through redirect.github.com and references in code spans are not
+# recorded (the approach Dependabot uses), so watch issues leave no trace on
+# unraid/api.
+UPSTREAM_URL_RE = re.compile(
+    rf"https://github\.com/{re.escape(UPSTREAM_REPO)}/(pull|issues)/(\d+)"
+)
+UPSTREAM_REF_RE = re.compile(rf"(?<![\w`/.-]){re.escape(UPSTREAM_REPO)}#(\d+)(?![\w`])")
+
+
+def without_backlinks(text: str) -> str:
+    """Rewrite upstream issue and PR references so GitHub records none."""
+    text = UPSTREAM_URL_RE.sub(
+        rf"https://redirect.github.com/{UPSTREAM_REPO}/\1/\2", text
+    )
+    return UPSTREAM_REF_RE.sub(lambda m: f"`{UPSTREAM_REPO}#{m[1]}`", text)
+
+
 def sanitise(text: str, limit: int = TEXT_LIMIT) -> str:
     """Make upstream text inert in an issue body.
 
@@ -640,7 +659,7 @@ def render_issue(
     lines.append("_Opened by the Upstream watch workflow._")
 
     head = "\n".join(header) + "\n\n"
-    body = "\n".join(lines)
+    body = without_backlinks("\n".join(lines))
     if len(head) + len(body) > BODY_LIMIT:
         notice = "\n\n_Truncated; see the workflow run summary for the full report._"
         body = body[: max(0, BODY_LIMIT - len(head) - len(notice))] + notice

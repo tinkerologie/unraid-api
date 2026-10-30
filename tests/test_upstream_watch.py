@@ -792,6 +792,36 @@ class TestRendering:
         assert uw.behaviour_matches("fix typo in docs") == []
 
 
+class TestNoUpstreamBacklinks:
+    """Watch issues must leave no cross-reference on unraid/api issues or PRs."""
+
+    def test_rewrites_references_and_urls(self) -> None:
+        text = (
+            "See unraid/api#2123, https://github.com/unraid/api/pull/2095 and "
+            "[unraid/api#2129](https://github.com/unraid/api/issues/2129). "
+            "Keep `unraid/api#1` and https://github.com/unraid/api/compare/a...b."
+        )
+        assert uw.without_backlinks(text) == (
+            "See `unraid/api#2123`, https://redirect.github.com/unraid/api/pull/2095 "
+            "and [`unraid/api#2129`]"
+            "(https://redirect.github.com/unraid/api/issues/2129). "
+            "Keep `unraid/api#1` and https://github.com/unraid/api/compare/a...b."
+        )
+
+    def test_scan_bodies_have_no_cross_references(self) -> None:
+        report = uw.scan(FakeGitHub(), REPO, since="v4.37.6", until="v4.37.9")
+        assert report["issues"]
+        for issue in report["issues"]:
+            body = issue["body"]
+            assert "github.com/unraid/api/pull/" not in body.replace(
+                "redirect.github.com", ""
+            )
+            assert "github.com/unraid/api/issues/" not in body.replace(
+                "redirect.github.com", ""
+            )
+            assert uw.UPSTREAM_REF_RE.search(body) is None
+
+
 class TestBehaviourNotes:
     def test_transient_pr_errors_fail_the_scan(self, tmp_path: Path) -> None:
         for error in (
