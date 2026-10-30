@@ -68,6 +68,9 @@ jobs:
   report:
     name: Report
     needs: scan
+    # Only runs on main open issues and record state; a dispatch from a
+    # branch only scans (the report artifact and job summary still show it).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       issues: write # create labels and issues, and update the state issue
