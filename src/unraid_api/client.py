@@ -88,6 +88,8 @@ HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_SERVER_ERROR = 500
 DEFAULT_HTTP_PORT = 80
+# Unraid's default Docker organizer root folder (DEFAULT_ORGANIZER_ROOT_ID upstream).
+DOCKER_ORGANIZER_ROOT_ID = "root"
 DEFAULT_HTTPS_PORT = 443
 
 
@@ -4115,7 +4117,7 @@ class UnraidClient:
 
         """
         mutation = """
-            mutation CreateApiKey($input: ApiKeyCreateInput!) {
+            mutation CreateApiKey($input: CreateApiKeyInput!) {
                 apiKey {
                     create(input: $input) {
                         id
@@ -4156,7 +4158,7 @@ class UnraidClient:
 
         """
         mutation = """
-            mutation UpdateApiKey($input: ApiKeyUpdateInput!) {
+            mutation UpdateApiKey($input: UpdateApiKeyInput!) {
                 apiKey {
                     update(input: $input) {
                         id
@@ -4187,7 +4189,7 @@ class UnraidClient:
 
         """
         mutation = """
-            mutation DeleteApiKeys($input: ApiKeyDeleteInput!) {
+            mutation DeleteApiKeys($input: DeleteApiKeyInput!) {
                 apiKey {
                     delete(input: $input)
                 }
@@ -5437,17 +5439,26 @@ class UnraidClient:
 
         Args:
             source_entry_ids: List of container/folder IDs to move.
-            destination_folder_id: Target folder ID (or None for root).
+            destination_folder_id: Target folder ID, or None for the organizer
+                root folder (``"root"``, Unraid's default organizer root).
 
         Returns:
             Updated ResolvedOrganizerV1 model.
 
+        Raises:
+            ValueError: ``destination_folder_id`` is empty or blank.
+
         """
         from unraid_api.models import ResolvedOrganizerV1
 
+        if destination_folder_id is None:
+            destination_folder_id = DOCKER_ORGANIZER_ROOT_ID
+        elif not destination_folder_id.strip():
+            raise ValueError("destination_folder_id must not be blank")
+
         mutation = """
             mutation MoveDockerEntries(
-                $sourceEntryIds: [String!]!, $destinationFolderId: String
+                $sourceEntryIds: [String!]!, $destinationFolderId: String!
             ) {
                 moveDockerEntriesToFolder(
                     sourceEntryIds: $sourceEntryIds,
@@ -5784,26 +5795,33 @@ class UnraidClient:
 
     async def update_server_identity(
         self,
-        name: str | None = None,
+        name: str,
         comment: str | None = None,
         sys_model: str | None = None,
     ) -> Server:
         """Update server name, comment, or model.
 
         Args:
-            name: New server name.
+            name: Server name. Required by the server even when only the
+                comment or model changes; pass the current name to keep it.
             comment: New server description.
             sys_model: Custom system model string.
 
         Returns:
             Updated Server model instance.
 
+        Raises:
+            ValueError: ``name`` is empty or blank.
+
         """
         from unraid_api.models import Server
 
+        if not name or not name.strip():
+            raise ValueError("name must not be blank")
+
         mutation = """
             mutation UpdateServerIdentity(
-                $name: String, $comment: String, $sysModel: String
+                $name: String!, $comment: String, $sysModel: String
             ) {
                 updateServerIdentity(
                     name: $name, comment: $comment, sysModel: $sysModel
@@ -5821,9 +5839,7 @@ class UnraidClient:
                 }
             }
         """
-        variables: dict[str, Any] = {}
-        if name is not None:
-            variables["name"] = name
+        variables: dict[str, Any] = {"name": name}
         if comment is not None:
             variables["comment"] = comment
         if sys_model is not None:

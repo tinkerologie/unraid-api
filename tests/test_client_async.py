@@ -7705,8 +7705,9 @@ class TestServerMethods:
                 )
                 assert updated.name == "Tower-Updated"
 
-                updated_empty = await client.update_server_identity()
-                assert updated_empty.name == "Tower"
+                # The server requires a name (updateServerIdentity(name: String!)).
+                with pytest.raises(ValueError, match="name must not be blank"):
+                    await client.update_server_identity("  ")
 
 
 class TestNotificationBatchMutations:
