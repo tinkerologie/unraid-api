@@ -35,8 +35,11 @@ All AI coding assistants (Claude Code, Gemini, GitHub Copilot, Cursor, Roo, Devi
 - `pytest --cov=src` — Run tests with coverage
 - `ruff check .` — Run ruff linter
 - `ruff format --check .` — Check code formatting
-- `mypy src` — Static type checking
+- `mypy src script` — Static type checking
 - `pre-commit run --all-files` — Run all configured pre-commit hooks
+
+`script/` holds the repository tooling (`schema_tools.py`, `upstream_watch.py`). Unlike
+`scripts/`, it is linted, type-checked and covered by tests like the library.
 
 Dependencies are managed with `uv`; run the tools above through `uv run` (for example
 `uv run pytest`). The pre-commit hooks run ruff, mypy and security checks.

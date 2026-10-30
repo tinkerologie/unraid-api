@@ -1,0 +1,56 @@
+# Trimmed from unraid/api v4.37.9 api/generated-schema.graphql.
+# unraid/api#2123 made the docker and vms roots nullable.
+scalar JSON
+
+type Query {
+  online: Boolean
+  vms: Vms
+  docker: Docker
+}
+
+type Mutation {
+  docker: DockerMutations!
+}
+
+type Docker {
+  id: ID!
+  containers(skipCache: Boolean! = false): [DockerContainer!]!
+  networks(skipCache: Boolean! = false): [DockerNetwork!]!
+}
+
+type DockerContainer {
+  id: ID!
+  names: [String!]!
+  image: String!
+  imageId: String!
+  state: ContainerState!
+  status: String!
+  autoStart: Boolean!
+  labels: JSON
+}
+
+enum ContainerState {
+  RUNNING
+  EXITED
+}
+
+type DockerNetwork {
+  id: ID!
+  name: String
+}
+
+type DockerMutations {
+  start(id: ID!): DockerContainer!
+}
+
+type Vms {
+  id: ID!
+  domains: [VmDomain!]
+}
+
+type VmDomain {
+  id: ID!
+  name: String
+  state: String
+  uuid: String
+}

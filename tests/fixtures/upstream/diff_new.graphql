@@ -1,0 +1,48 @@
+# Covers every schema diff kind, paired with diff_old.graphql.
+type Query {
+  kept: Kept
+  fresh: Int
+}
+
+type Mutation {
+  act(input: ActInput!): Boolean
+}
+
+type Subscription {
+  events: Int
+}
+
+type Kept {
+  becomesNullable: Int
+  becomesNonNull: Int!
+  changesType: String
+  deprecated: Int @deprecated(reason: "Use something else")
+  added: Int
+  withArgs(
+    retype: String
+    deprecateArg: Int @deprecated(reason: "Ignored")
+    newArg: Boolean
+  ): Int
+}
+
+type NewType {
+  id: ID
+}
+
+input ActInput {
+  retyped: String
+  same: Int
+  added: Int!
+}
+
+enum Mode {
+  KEPT
+  DEPRECATE @deprecated(reason: "Gone soon")
+  ALREADY @deprecated(reason: "Old")
+  NEW
+}
+
+interface Named {
+  name: String
+  nick: String
+}
