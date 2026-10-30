@@ -179,8 +179,11 @@ jobs:
               );
             }
 
+            // The print() rule covers the published package only: library code
+            // must log, not print into its consumers' output. Developer tools in
+            // script/ and scripts/ print their reports by design.
             const pythonSrcFiles = changedFiles.filter(
-              (f) => f.filename.endsWith(".py") && !f.filename.startsWith("tests/") && !f.filename.startsWith("examples/")
+              (f) => f.filename.startsWith("src/") && f.filename.endsWith(".py")
             );
 
             for (const file of pythonSrcFiles) {

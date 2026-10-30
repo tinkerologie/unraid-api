@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **PR governance** — The `print()` check applies to the package source under `src/` only; the developer tools in `script/` and `scripts/` may print their reports ([#143](https://github.com/tinkerologie/unraid-api/issues/143)).
+
 ## [1.14.2] - 2026-10-30
 
 ### Fixed
