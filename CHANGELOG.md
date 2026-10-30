@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-10-30
+
 ### Fixed
 
 - **Unraid API 4.37.8+ nullable `docker`/`vms` roots** — When the Docker or VM service fails, these servers return `{"docker": null}` with errors ([unraid/api#2123](https://github.com/unraid/api/pull/2123)). `query()` now raises `UnraidAPIError` (carrying the GraphQL errors) when every returned root is null and errors are present, and the container, VM, network, update-status, port-conflict, log and organizer readers no longer fail with `AttributeError`. They never return an empty list for a failed service ([#135](https://github.com/tinkerologie/unraid-api/issues/135)).
@@ -541,7 +543,9 @@ Return dict/list for flexible access:
 - `PhysicalDisk`
 - `Notification`, `NotificationOverview`
 
-[Unreleased]: https://github.com/tinkerologie/unraid-api/compare/v1.13.2...HEAD
+[Unreleased]: https://github.com/tinkerologie/unraid-api/compare/v1.14.1...HEAD
+[1.14.1]: https://github.com/tinkerologie/unraid-api/compare/v1.14.0...v1.14.1
+[1.14.0]: https://github.com/tinkerologie/unraid-api/compare/v1.13.2...v1.14.0
 [1.13.2]: https://github.com/tinkerologie/unraid-api/compare/v1.13.1...v1.13.2
 [1.8.0]: https://github.com/tinkerologie/unraid-api/compare/v1.7.1...v1.8.0
 [1.7.1]: https://github.com/tinkerologie/unraid-api/compare/v1.7.0...v1.7.1
