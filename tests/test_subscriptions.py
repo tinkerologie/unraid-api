@@ -990,6 +990,9 @@ class TestTypedSubscriptions:
         assert results[0].status == "RUNNING"
         assert results[0].progress == 42
         assert results[0].speed == "150.5 MB/s"
+        assert results[0].duration == 1200
+        assert results[0].elapsed == 1200
+        assert results[0].estimated == round(1200 * (100 - 42) / 42)
         assert results[0].correcting is True
 
     async def test_subscribe_owner(self, ws_client: UnraidClient) -> None:

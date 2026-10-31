@@ -170,3 +170,19 @@ async def test_api_key_variables_are_unchanged() -> None:
     result = await client.delete_api_keys([API_KEY_ID])
     assert client.mutate.call_args.args[1] == {"input": {"ids": [API_KEY_ID]}}
     assert result == {"apiKey": {"create": {}, "update": {}, "delete": True}}
+
+
+async def test_array_queries_match_upstream_schema(schema: GraphQLSchema) -> None:
+    """typed_get_array and get_array_status validate against upstream schema."""
+    client = UnraidClient("unraid.test", "test-key")
+    client.query = AsyncMock(return_value={"array": {}})  # type: ignore[method-assign]
+
+    await client.typed_get_array()
+    doc1 = parse(client.query.call_args.args[0])
+    assert validate(schema, doc1) == []
+    assert "duration" in client.query.call_args.args[0]
+
+    await client.get_array_status()
+    doc2 = parse(client.query.call_args.args[0])
+    assert validate(schema, doc2) == []
+    assert "duration" in client.query.call_args.args[0]
