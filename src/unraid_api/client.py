@@ -1803,16 +1803,35 @@ class UnraidClient:
         boot_data = array_data.get("boot")
         boot = ArrayDisk(**boot_data) if boot_data else None
 
+        parity_status = dict(array_data.get("parityCheckStatus") or {})
+        if parity_status.get("errors") is None:
+            parity_status["errors"] = await self._get_parity_sync_errors()
+
         return UnraidArray(
             state=array_data.get("state"),
             capacity=array_data.get("capacity", {}),
-            parityCheckStatus=array_data.get("parityCheckStatus", {}),
+            parityCheckStatus=parity_status,
             boot=boot,
             bootDevices=[ArrayDisk(**d) for d in (array_data.get("bootDevices") or [])],
             parities=[ArrayDisk(**d) for d in (array_data.get("parities") or [])],
             disks=[ArrayDisk(**d) for d in (array_data.get("disks") or [])],
             caches=[ArrayDisk(**d) for d in (array_data.get("caches") or [])],
         )
+
+    async def _get_parity_sync_errors(self) -> int | None:
+        """Return Unraid's sync error count, or None when it is unavailable.
+
+        ``parityCheckStatus.errors`` is empty on current API versions. The count
+        comes from its own request because ``Query.vars`` is non-null: a failure
+        there would null the whole response if it shared a query with ``array``.
+        """
+        try:
+            result = await self.query("query { vars { sbSyncErrs } }")
+        except UnraidAPIError:
+            _LOGGER.debug("Parity sync error count unavailable", exc_info=True)
+            return None
+        count: int | None = (result.get("vars") or {}).get("sbSyncErrs")
+        return count
 
     async def typed_get_shares(self) -> list[Share]:
         """Get all shares as Pydantic models.
@@ -3238,6 +3257,7 @@ class UnraidClient:
                     mdResyncPos
                     mdState
                     mdVersion
+                    sbSyncErrs
                     sbVersion
                     joinStatus
                     pollAttributesStatus
