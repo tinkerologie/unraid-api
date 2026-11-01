@@ -1776,6 +1776,94 @@ class TestParityCheckHelpers:
         assert pc.has_problem is False
 
 
+class TestParityCheckTiming:
+    """Tests for derived parity check elapsed and estimated timings."""
+
+    def test_timing_populated_when_running(self) -> None:
+        """Elapsed and estimated remaining seconds derive when active and running."""
+        from unraid_api.models import ParityCheck
+
+        pc = ParityCheck(duration=1200, progress=40, status="RUNNING")
+        assert pc.duration == 1200
+        assert pc.elapsed == 1200
+        assert pc.estimated == 1800
+
+    def test_timing_when_paused(self) -> None:
+        """Estimated remaining seconds is None when paused."""
+        from unraid_api.models import ParityCheck
+
+        pc = ParityCheck(duration=1200, progress=40, status="PAUSED")
+        assert pc.duration == 1200
+        assert pc.elapsed == 1200
+        assert pc.estimated is None
+
+        pc_paused_flag = ParityCheck(
+            duration=1200, progress=40, running=True, paused=True
+        )
+        assert pc_paused_flag.elapsed == 1200
+        assert pc_paused_flag.estimated is None
+
+    def test_timing_when_completed(self) -> None:
+        """Estimated remaining seconds is None when completed at 100%."""
+        from unraid_api.models import ParityCheck
+
+        pc = ParityCheck(duration=1200, progress=100, status="COMPLETED")
+        assert pc.duration == 1200
+        assert pc.elapsed == 1200
+        assert pc.estimated is None
+
+    def test_timing_zero_progress(self) -> None:
+        """Estimated remaining seconds is None at zero progress."""
+        from unraid_api.models import ParityCheck
+
+        pc = ParityCheck(duration=1200, progress=0, status="RUNNING")
+        assert pc.duration == 1200
+        assert pc.elapsed == 1200
+        assert pc.estimated is None
+
+    def test_timing_zero_duration(self) -> None:
+        """Estimated remaining seconds is None when elapsed is zero."""
+        from unraid_api.models import ParityCheck
+
+        pc = ParityCheck(duration=0, progress=40, status="RUNNING")
+        assert pc.duration == 0
+        assert pc.elapsed == 0
+        assert pc.estimated is None
+
+    def test_timing_missing_duration(self) -> None:
+        """Elapsed and estimated remain None when duration is absent."""
+        from unraid_api.models import ParityCheck
+
+        pc = ParityCheck(progress=40, status="RUNNING")
+        assert pc.duration is None
+        assert pc.elapsed is None
+        assert pc.estimated is None
+
+    def test_timing_running_flag_without_status(self) -> None:
+        """Estimated calculates when running=True without explicit status."""
+        from unraid_api.models import ParityCheck
+
+        pc = ParityCheck(duration=1200, progress=40, running=True)
+        assert pc.duration == 1200
+        assert pc.elapsed == 1200
+        assert pc.estimated == 1800
+
+    def test_explicit_timing_preserved(self) -> None:
+        """Explicit elapsed and estimated values are not overwritten."""
+        from unraid_api.models import ParityCheck
+
+        pc = ParityCheck(
+            duration=1200,
+            elapsed=500,
+            estimated=2000,
+            progress=40,
+            status="RUNNING",
+        )
+        assert pc.duration == 1200
+        assert pc.elapsed == 500
+        assert pc.estimated == 2000
+
+
 # =============================================================================
 # Issue #18: ParityHistoryEntry model
 # =============================================================================

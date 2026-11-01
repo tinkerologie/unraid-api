@@ -735,8 +735,37 @@ class ParityCheck(UnraidBaseModel):
     speed: str | None = None
     date: ParsedDatetime = None
     duration: int | None = None
-    elapsed: int | None = None  # Elapsed time in seconds
-    estimated: int | None = None  # Estimated time remaining
+    elapsed: int | None = None  # Elapsed time in seconds (falls back to duration)
+    estimated: int | None = None  # Estimated remaining seconds (derived when running)
+
+    @model_validator(mode="after")
+    def _populate_timing(self) -> ParityCheck:
+        """Populate elapsed and approximate progress-based estimated remaining seconds.
+
+        Note: On incremental parity checks, duration covers only the current
+        increment, so estimated reflects progress of the active run.
+        """
+        if self.elapsed is None and self.duration is not None:
+            self.elapsed = self.duration
+
+        if self.estimated is None:
+            status_upper = self.status.upper() if self.status is not None else None
+            is_running = status_upper == "RUNNING" or self.running is True
+            is_paused = status_upper == "PAUSED" or self.paused is True
+
+            if (
+                is_running
+                and not is_paused
+                and self.progress is not None
+                and 0 < self.progress < 100
+                and self.elapsed is not None
+                and self.elapsed > 0
+            ):
+                self.estimated = round(
+                    self.elapsed * (100 - self.progress) / self.progress
+                )
+
+        return self
 
     @property
     def is_running(self) -> bool:

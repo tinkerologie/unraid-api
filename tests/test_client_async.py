@@ -3327,6 +3327,58 @@ class TestTypedGetArrayMethod:
                 assert result.boot is not None
                 assert result.boot.name == "flash"
 
+    async def test_typed_get_array_running_parity_timing(self) -> None:
+        """Getting array with running parity check derives elapsed and estimated."""
+        from unraid_api.models import UnraidArray
+
+        captured_queries: list[str] = []
+
+        async def capture(url: object, **kwargs: object) -> CallbackResult:
+            body = kwargs.get("json") if isinstance(kwargs.get("json"), dict) else {}
+            captured_queries.append(body.get("query", ""))
+            return CallbackResult(
+                status=200,
+                payload={
+                    "data": {
+                        "array": {
+                            "state": "STARTED",
+                            "capacity": {
+                                "kilobytes": {
+                                    "total": 1000,
+                                    "used": 400,
+                                    "free": 600,
+                                }
+                            },
+                            "parityCheckStatus": {
+                                "status": "RUNNING",
+                                "progress": 40,
+                                "running": True,
+                                "paused": False,
+                                "errors": 0,
+                                "speed": "120 MB/s",
+                                "duration": 1200,
+                            },
+                        }
+                    }
+                },
+            )
+
+        async with aiointercept(mock_external_urls=True) as m:
+            m.get("http://unraid.test/graphql", status=400)
+            m.post("http://unraid.test/graphql", callback=capture)
+
+            async with UnraidClient(
+                "unraid.test", "test-key", verify_ssl=False
+            ) as client:
+                result = await client.typed_get_array()
+
+                assert isinstance(result, UnraidArray)
+                assert result.parityCheckStatus.status == "RUNNING"
+                assert result.parityCheckStatus.duration == 1200
+                assert result.parityCheckStatus.elapsed == 1200
+                assert result.parityCheckStatus.estimated == 1800
+                assert "duration" in captured_queries[0]
+
 
 class TestTypedGetSharesMethod:
     """Tests for typed_get_shares method (returns list[Share])."""

@@ -1766,6 +1766,7 @@ class UnraidClient:
                         paused
                         errors
                         speed
+                        duration
                     }
                     boot {
                         id name device size temp type
@@ -2753,6 +2754,7 @@ class UnraidClient:
                         paused
                         errors
                         speed
+                        duration
                     }
                     boot {
                         id name device size temp type

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Parity timing population and progress-based estimation** — Added `duration` to `parityCheckStatus` selections in `typed_get_array()` and `get_array_status()`. `ParityCheck` normalizes `elapsed` from `duration` when absent, and derives an approximate progress-based `estimated` remaining seconds when running and unpaused (`round(elapsed * (100 - progress) / progress)`), leaving it `None` otherwise ([#147](https://github.com/tinkerologie/unraid-api/issues/147)).
+
 ### Added
 
 - **Upstream watch workflow** — `.github/workflows/upstream-watch.yml` runs on the 1st and 15th of each month (and on demand). A read-only scan diffs unraid/api's `api/generated-schema.graphql` between new release tags and from the latest release to `main`, validates every library operation against each new schema, names the library methods and `file:line` a change affects, and flags release notes that change request handling. A separate job with only `issues: write` opens deduplicated `bug`/`enhancement` + `upstream` issues and records the last processed release in a closed `Upstream watch state` issue ([#136](https://github.com/tinkerologie/unraid-api/issues/136)).
