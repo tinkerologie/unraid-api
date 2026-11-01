@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-11-01
+
 ### Fixed
 
 - **Parity error count** — `typed_get_array()` fills an empty `parityCheckStatus.errors` from `vars.sbSyncErrs`, so `ParityCheck.has_problem` can see errors during a running check. The count uses a separate request, so a failure there leaves `errors` as `None` instead of failing the array read. `get_vars()` now selects `sbSyncErrs`, which also populates `Vars.sb_sync_errs` ([#150](https://github.com/tinkerologie/unraid-api/issues/150)).
