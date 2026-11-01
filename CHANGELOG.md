@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-11-01
+
 ### Fixed
 
 - **Parity timing population and progress-based estimation** — Added `duration` to `parityCheckStatus` selections in `typed_get_array()` and `get_array_status()`. `ParityCheck` normalizes `elapsed` from `duration` when absent, and derives an approximate progress-based `estimated` remaining seconds when running and unpaused (`round(elapsed * (100 - progress) / progress)`), leaving it `None` otherwise ([#147](https://github.com/tinkerologie/unraid-api/issues/147)).
@@ -570,7 +572,8 @@ Return dict/list for flexible access:
 - `PhysicalDisk`
 - `Notification`, `NotificationOverview`
 
-[Unreleased]: https://github.com/tinkerologie/unraid-api/compare/v1.14.2...HEAD
+[Unreleased]: https://github.com/tinkerologie/unraid-api/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/tinkerologie/unraid-api/compare/v1.14.2...v1.15.0
 [1.14.2]: https://github.com/tinkerologie/unraid-api/compare/v1.14.1...v1.14.2
 [1.14.1]: https://github.com/tinkerologie/unraid-api/compare/v1.14.0...v1.14.1
 [1.14.0]: https://github.com/tinkerologie/unraid-api/compare/v1.13.2...v1.14.0
