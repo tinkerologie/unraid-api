@@ -3380,6 +3380,58 @@ class TestTypedGetArrayMethod:
                 assert "duration" in captured_queries[0]
 
 
+class TestTypedGetArrayParityErrors:
+    """Tests for the parity error count fallback in typed_get_array."""
+
+    @staticmethod
+    def _client(*responses: object) -> UnraidClient:
+        client = UnraidClient("unraid.test", "test-key")
+        client.query = AsyncMock(side_effect=responses)  # type: ignore[method-assign]
+        return client
+
+    @staticmethod
+    def _array(errors: int | None) -> dict[str, object]:
+        status = {"status": "RUNNING", "progress": 40, "errors": errors}
+        return {"array": {"state": "STARTED", "parityCheckStatus": status}}
+
+    @pytest.mark.parametrize(
+        ("count", "problem"), [(0, False), (3, True), (None, False)]
+    )
+    async def test_missing_errors_use_sync_error_count(
+        self, count: int | None, problem: bool
+    ) -> None:
+        """Empty upstream errors are filled from vars.sbSyncErrs."""
+        client = self._client(self._array(None), {"vars": {"sbSyncErrs": count}})
+
+        parity = (await client.typed_get_array()).parityCheckStatus
+
+        assert parity.errors == count
+        assert parity.has_problem is problem
+
+    @pytest.mark.parametrize("errors", [0, 2])
+    async def test_upstream_errors_are_kept(self, errors: int) -> None:
+        """A reported count, including zero, is kept without a second request."""
+        client = self._client(self._array(errors))
+
+        parity = (await client.typed_get_array()).parityCheckStatus
+
+        assert parity.errors == errors
+        client.query.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "failure",
+        [UnraidAPIError("forbidden"), UnraidConnectionError("down"), {"vars": None}],
+    )
+    async def test_count_failure_leaves_errors_unknown(self, failure: object) -> None:
+        """A failed count request does not fail the array read."""
+        client = self._client(self._array(None), failure)
+
+        result = await client.typed_get_array()
+
+        assert result.state == "STARTED"
+        assert result.parityCheckStatus.errors is None
+
+
 class TestTypedGetSharesMethod:
     """Tests for typed_get_shares method (returns list[Share])."""
 

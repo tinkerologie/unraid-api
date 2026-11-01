@@ -178,9 +178,11 @@ async def test_array_queries_match_upstream_schema(schema: GraphQLSchema) -> Non
     client.query = AsyncMock(return_value={"array": {}})  # type: ignore[method-assign]
 
     await client.typed_get_array()
-    doc1 = parse(client.query.call_args.args[0])
-    assert validate(schema, doc1) == []
-    assert "duration" in client.query.call_args.args[0]
+    array_query, errors_query = (c.args[0] for c in client.query.call_args_list)
+    assert validate(schema, parse(array_query)) == []
+    assert "duration" in array_query
+    assert validate(schema, parse(errors_query)) == []
+    assert "sbSyncErrs" in errors_query
 
     await client.get_array_status()
     doc2 = parse(client.query.call_args.args[0])
