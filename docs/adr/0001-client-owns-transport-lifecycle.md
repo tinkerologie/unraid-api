@@ -1,16 +1,22 @@
 # Keep transport lifecycle in the asynchronous client
 
-`UnraidClient` owns GraphQL HTTP execution, SSL-mode and endpoint discovery, and
-WebSocket protocol handling. It can create and close its own asynchronous session
-or borrow a caller-supplied session without closing it, allowing Home Assistant to
-retain session ownership; subscription generators manage their WebSocket lifetime
-and surface stream failures for callers to reconnect. This gives consumers one
-client interface while leaving application refresh schedules and reconnect policy
-outside the library, at the cost of shared session and resolved-endpoint state
-inside each client.
+`UnraidClient` sends GraphQL requests over HTTP.
+The client finds the endpoint and SSL mode.
+It also manages the WebSocket protocol.
 
-See [client lifecycle and subscriptions](../../src/unraid_api/client.py),
-[session tests](../../tests/test_client_async.py),
-[subscription tests](../../tests/test_subscriptions.py), and
-[public usage](../../README.md). This is a retrospective description of the
-implemented ownership contract.
+The client can open and close its own HTTP session.
+It can also use a session from the caller.
+When the caller supplies a session, the caller closes it.
+This lets Home Assistant keep control of its session.
+
+Each subscription generator manages its WebSocket connection.
+If the stream fails, the caller can reconnect.
+The application sets its own update intervals and decides when to reconnect.
+Queries and subscriptions share one endpoint and session for each client.
+
+## Related files
+
+- [client lifecycle and subscriptions](../../src/unraid_api/client.py)
+- [session tests](../../tests/test_client_async.py)
+- [subscription tests](../../tests/test_subscriptions.py)
+- [public usage](../../README.md)

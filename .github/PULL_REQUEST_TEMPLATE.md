@@ -2,7 +2,7 @@
 
 ## Description
 
-<!-- Provide a clear and concise description of what this PR does -->
+<!-- Describe the change. -->
 
 ## Type of Change
 
@@ -19,11 +19,10 @@
 ## Pre-Submission Governance
 
 <!--
-  REQUIRED for everyone, including AI agents and automation.
-  Every box below is mandatory. If any box is left unchecked, the automated
-  "PR Governance" check fails and the PR will not be reviewed or merged.
-  Do not open multiple overlapping or back-to-back PRs for the same work;
-  batch related changes together to avoid wasting CI runner capacity.
+  All contributors, AI agents, and automation must complete this checklist.
+  The PR Governance check fails if a box is empty.
+  The PR must pass this check before review or merge.
+  Put related changes in one PR to limit the number of CI runs.
 -->
 
 - [ ] I built and tested the package locally and verified this change actually works
@@ -42,7 +41,7 @@ Fixes #
 
 ## Changes Made
 
-<!-- List the main changes in this PR -->
+<!-- List the main changes. -->
 
 -
 -
@@ -61,7 +60,7 @@ Fixes #
 
 ## Testing Performed
 
-<!-- Check all that apply and describe what you tested -->
+<!-- Select each check you ran. Describe what you tested. -->
 
 - [ ] Ran unit tests (`pytest`)
 - [ ] Ran linter (`ruff` or `flake8`)
@@ -87,11 +86,11 @@ Fixes #
 
 ## Breaking Changes
 
-<!-- If this PR introduces breaking changes, describe them and provide migration instructions -->
+<!-- Describe each breaking change. Give the migration steps. -->
 
 ## Checklist
 
-<!-- Ensure you've completed all required items before submitting -->
+<!-- Complete each required item before you submit the PR. -->
 
 - [ ] I have updated CHANGELOG.md under [Unreleased] with details of this change
 - [ ] I linked the related issue in **Related Issues** (only maintainers may note "None", for housekeeping)

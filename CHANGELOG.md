@@ -1,11 +1,15 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+This file lists important changes to the project.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+This file uses the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
+This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- Apply ASD-STE100 Issue 9 to project documentation. Add a writing guide for contributors.
 
 ## [1.16.0] - 2026-11-07
 

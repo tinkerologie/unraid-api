@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-`unraid-api` is an async Python client library (PyPI package) for Unraid's official GraphQL API (v4.21.0+, Unraid 7.1.4+). Primary consumer is the [ha-unraid](https://github.com/ruaan-deysel/ha-unraid) Home Assistant integration.
+`unraid-api` is an async Python client library (PyPI package) for Unraid's official GraphQL API. It supports API v4.21.0+ and Unraid 7.1.4+. Its primary consumer is the [ha-unraid](https://github.com/ruaan-deysel/ha-unraid) Home Assistant integration.
 
 ## Critical Requirements
 
 ### Test-Driven Development (TDD)
-- **Every feature MUST have tests written FIRST** before implementation
+- **Each feature MUST have tests written FIRST** before implementation
 - Test files live in `tests/` directory, mirroring source structure
 - Use `pytest` with `pytest-asyncio` for async tests
 - Run tests: `pytest tests/ -v --cov=src/unraid_api`
@@ -111,7 +111,7 @@ uv run ruff format .
 uv run mypy src/
 ```
 
-**Pre-commit MUST always be run before any commit.**
+**Run pre-commit before each commit.**
 
 ### Usage Example
 ```python
@@ -137,7 +137,7 @@ async with UnraidClient("192.168.1.100", "your-api-key") as client:
 
 ## Documentation Requirements
 
-**README.md and CHANGELOG.md MUST always be kept up to date.**
+**Keep README.md and CHANGELOG.md current.**
 
 ### README.md
 - Update API Reference tables when adding new methods
@@ -152,7 +152,7 @@ async with UnraidClient("192.168.1.100", "your-api-key") as client:
 
 ## Versioning
 
-**Version numbers MUST be updated when new features or bug fixes are made.**
+**Update version numbers for new features and bug fixes.**
 
 ### Semantic Versioning
 - **MAJOR** (X.0.0): Breaking API changes
@@ -196,7 +196,12 @@ python scripts/unraid-api-client.py --all
 ```
 
 ### Test Suites
-- **Query tests**: Connection, version, compatibility, system info, registration, vars, metrics, owner, flash, services, array, disks, shares, containers, networks, VMs, UPS, plugins, notifications, parity history, logs, cloud, connect, remote access, user account, API keys, all typed methods, v4.30.0 features
+- **Query tests** cover these areas.
+  - Connection, version, compatibility, system info, registration, vars, and metrics
+  - Owner, flash, services, array, disks, shares, and parity history
+  - Containers, networks, VMs, UPS, plugins, notifications, and logs
+  - Cloud, Connect, remote access, user account, and API keys
+  - All typed methods and v4.30.0 features
 - **Subscription tests**: CPU metrics, memory metrics, CPU telemetry, array updates, UPS updates, container stats, raw subscribe
 - **SSL tests**: Standard ports, same-port (ha-unraid behavior), nginx 400 detection, HTTP-as-single-port
 
@@ -207,7 +212,10 @@ Dev: `pytest`, `pytest-asyncio`, `pytest-cov`, `aiointercept`, `ruff`, `mypy`
 
 ### Dependency Notes
 
-**aiointercept (test mocking)**: Tests mock aiohttp requests with `aiointercept` (https://github.com/Polandia94/aiointercept), which routes requests through a real local aiohttp.web test server via DNS-resolver patching. It replaced `aioresponses` (incompatible with aiohttp 3.14.0's `ClientResponse.__init__()` change), removing the previous `aiohttp<3.14.0` constraint. Migration notes:
-- Test URLs must use hostnames (e.g. `unraid.test`), never bare IPs — DNS patching cannot intercept IP literals.
+**aiointercept (test mocking)**. Use `aiointercept` (https://github.com/Polandia94/aiointercept) to mock aiohttp requests.
+It patches the DNS resolver to send requests to a local aiohttp.web test server.
+The old `aioresponses` library does not support the `ClientResponse.__init__()` change in aiohttp 3.14.0.
+The change to `aiointercept` removed the `aiohttp<3.14.0` constraint.
+- Test URLs must use hostnames (for example `unraid.test`), never bare IPs — DNS patching cannot intercept IP literals.
 - Use `async with aiointercept(mock_external_urls=True) as m:` (async context manager).
-- `exception=True` closes the connection so the client sees `ClientConnectionError`; tests that need a specific exception type (TimeoutError, SSL errors, ClientResponseError) patch the client session directly with `unittest.mock.patch.object(client._session, "post", side_effect=...)`.
+- `exception=True` closes the connection so the client sees `ClientConnectionError`. Tests that need a specific exception type (TimeoutError, SSL errors, ClientResponseError) patch the client session directly with `unittest.mock.patch.object(client._session, "post", side_effect=...)`.

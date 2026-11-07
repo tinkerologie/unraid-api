@@ -1,16 +1,21 @@
 # Adapt operations to server capabilities
 
-The client discovers relevant GraphQL fields once per client using introspection
-and composes or guards operations from that cached result instead of assuming
-that every supported server has the same schema. Explicit `INTROSPECTION_DISABLED`
-responses select the known-current field set minus retired fields; other
-introspection failures use a permissive fallback, while authentication failures
-propagate. This preserves access when introspection is unavailable, trading exact
-feature knowledge for possible operation-time errors and a cache that lasts for
-the client’s lifetime.
+The client uses GraphQL introspection to find the fields that the server supports.
+It keeps the result in a cache for the life of the client.
+It uses the result to select fields and prevent requests that the server does not support.
 
-See [capability representation](../../src/unraid_api/capabilities.py),
-[discovery and guards](../../src/unraid_api/client.py),
-[capability tests](../../tests/test_capabilities.py), and
-[disabled-introspection tests](../../tests/test_api_4378_compat.py).
-Standby-sensitive reads have a separate version gate in [ADR 0004](0004-standby-aware-reads.md).
+If the server returns `INTROSPECTION_DISABLED`, the client uses the current field set and omits obsolete fields.
+For other introspection failures, the client permits requests without a list of supported fields.
+If authentication fails, the client raises `UnraidAuthenticationError`.
+
+The client can operate when introspection is not available.
+In that case, an operation can fail if the server does not support the requested field.
+The standby check uses a separate API version check.
+
+## Related files
+
+- [capability representation](../../src/unraid_api/capabilities.py)
+- [discovery and guards](../../src/unraid_api/client.py)
+- [capability tests](../../tests/test_capabilities.py)
+- [disabled-introspection tests](../../tests/test_api_4378_compat.py)
+- [ADR 0004](0004-standby-aware-reads.md)

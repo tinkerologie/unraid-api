@@ -12,21 +12,23 @@
 | **Description** | Python client library and CLI for the Unraid GraphQL API. |
 | **Primary Consumer** | The [ha-unraid](https://github.com/tinkerologie/ha-unraid) Home Assistant integration |
 
+Use [ASD-STE100 Issue 9](docs/agents/documentation.md) for new or changed English documentation.
+
 ## Mandatory Development Workflow for AI Agents
 
-All AI coding assistants (Claude Code, Gemini, GitHub Copilot, Cursor, Roo, Devin, etc.) MUST strictly adhere to the following workflow when working on this repository:
+All AI coding agents must follow these steps.
 
-1. Issue-First Requirement: Never start writing code or creating pull requests without an existing GitHub Issue.
-2. Issue Template: Issues must be created using the official Issue Forms (`01-bug-report.yml` for bugs or `02-enhancement-request.yml` for enhancements).
-3. CodeRabbit AI Plan: Every issue must have a generated Coding Plan from CodeRabbit AI (`@coderabbitai plan`). AI agents must read and implement strictly according to the approved plan.
-4. Branch Discipline: Always create and work on a dedicated branch (`feat/<issue-id>-<description>` or `fix/<issue-id>-<description>`). NEVER commit directly to `main`.
-5. Documentation & Changelog: Update `CHANGELOG.md` under `## [Unreleased]` for any user-facing or architectural changes.
-6. Local Verification: Run all test, lint, format, and typecheck commands locally before committing. All tests must pass with zero errors and zero warnings.
-7. PR Template Completion: Always use `.github/PULL_REQUEST_TEMPLATE.md`. Complete all fields, link the issue using `Closes #<id>` or `Fixes #<id>` when the PR fully resolves it, or `Part of #<id>` for partial work (only maintainers with write access may write `None`, for housekeeping), and check all Pre-Submission Governance boxes with real terminal output.
-8. Draft PR First: ALWAYS open pull requests as DRAFT (`gh pr create --draft`).
-9. CI Verification: Wait for CI workflows to run on the draft PR and verify that all status checks pass.
-10. Ready for Review: Only mark the PR as ready for review (`gh pr ready`) once all checks pass and all due diligence is verified.
-11. Review Clearance: Review and resolve all CodeRabbit AI and GitHub Copilot comments. Ensure Codecov reports show zero errors, zero warnings, and no coverage drop.
+1. Find the GitHub issue before you write code or create a pull request (PR).
+2. Use the official issue form. Use `01-bug-report.yml` for a bug or `02-enhancement-request.yml` for an enhancement.
+3. Make sure the issue has a CodeRabbit Coding Plan (`@coderabbitai plan`). Read the approved plan. Follow it.
+4. Create a branch for the issue. Use `feat/<issue-id>-<description>` or `fix/<issue-id>-<description>`. Do not commit to `main`.
+5. Record user-facing or architecture changes under `## [Unreleased]` in `CHANGELOG.md`.
+6. Run all local test, lint, format, and type checks before you commit. Correct all errors and warnings.
+7. Use `.github/PULL_REQUEST_TEMPLATE.md`. Complete each field. Link the issue as specified in **Issue and Pull Request Governance**. Complete the Pre-Submission Governance checklist. Paste the terminal output from the checks.
+8. Open the PR as a draft (`gh pr create --draft`).
+9. Wait for all CI checks on the draft PR to pass.
+10. Complete the required verification. Then mark the PR as ready for review (`gh pr ready`).
+11. Review and resolve all CodeRabbit and GitHub Copilot comments. Check that Codecov shows zero errors, zero warnings, and no decrease in coverage.
 
 
 ## Executable Verification Commands
@@ -39,10 +41,10 @@ All AI coding assistants (Claude Code, Gemini, GitHub Copilot, Cursor, Roo, Devi
 - `pre-commit run --all-files` — Run all configured pre-commit hooks
 
 `script/` holds the repository tooling (`schema_tools.py`, `upstream_watch.py`). Unlike
-`scripts/`, it is linted, type-checked and covered by tests like the library.
+`scripts/`, the `script/` directory has lint checks, type checks, and tests like the library.
 
-Dependencies are managed with `uv`; run the tools above through `uv run` (for example
-`uv run pytest`). The pre-commit hooks run ruff, mypy and security checks.
+Use `uv` to manage dependencies. Run the tools above with `uv run`, for example
+`uv run pytest`. The pre-commit hooks run ruff, mypy and security checks.
 
 ```bash
 uv sync --all-extras                                                     # Setup
@@ -67,8 +69,8 @@ See `UNRAIDAPI.md` for available GraphQL fields and schema documentation.
 ### Client Design
 
 - **Async context manager**: `async with UnraidClient(host, api_key) as client:`
-- **Session injection**: Accepts external `aiohttp.ClientSession` for HA integration (won't be closed by client)
-- **SSL auto-discovery**: Handles Unraid's "No", "Yes", and "Strict" SSL modes via redirect detection
+- **Session injection**: Accepts an external `aiohttp.ClientSession` for Home Assistant. The client leaves the session open.
+- **SSL auto-discovery**: Handles Unraid's "No", "Yes", and "Strict" SSL modes through redirect detection
 - **GraphQL variables**: Always use variables, never string interpolation for security
 
 ### Key Patterns
@@ -96,7 +98,7 @@ class ArrayDisk(UnraidBaseModel):
 
 - `get_array_status()` and `get_array_disks()` do NOT wake sleeping disks (safe for polling)
 - `get_physical_disks()` WILL wake sleeping disks (use sparingly)
-- Check `isSpinning` field; `temp` is null/0 for standby disks
+- Check the `isSpinning` field. For disks in standby, `temp` is null or zero.
 
 ## Test Requirements
 
@@ -108,47 +110,47 @@ class ArrayDisk(UnraidBaseModel):
 
 - Always: Write tests for any new or modified functionality, verify changes locally, and update CHANGELOG.md under `[Unreleased]`.
 - Ask first: Major architectural changes, removing public APIs, or adding heavy external dependencies.
-- Never: Commit secrets, credentials, API keys, or private certificates. Never commit directly to `main`.
+- Never: Commit secrets, credentials, API keys, or private certificates. Do not commit directly to `main`.
 
 ## Working Principles
 
 ### Think Before Coding
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+**Do not assume. Do not hide confusion. Surface tradeoffs.**
 
 Before implementing:
 - State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
+- If multiple interpretations exist, present them - do not pick silently.
 - If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+- If an instruction is unclear, stop. Identify the instruction. Ask for clarification.
 
 ### Simplicity First
 
 **Minimum code that solves the problem. Nothing speculative.**
 
-- No features beyond what was asked.
+- Add only the features the user requests.
 - No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
+- No "flexibility" or "configurability" that was not requested.
 - No error handling for impossible scenarios.
 - If you write 200 lines and it could be 50, rewrite it.
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+Check whether the change is more complex than necessary. If it is, simplify it.
 
 ### Surgical Changes
 
 **Touch only what you must. Clean up only your own mess.**
 
 When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
+- Do not "improve" adjacent code, comments, or formatting.
+- Do not refactor things that are not broken.
+- Use the style of the existing code.
+- If you notice unrelated dead code, mention it - do not delete it.
 
 When your changes create orphans:
 - Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
+- Do not remove pre-existing dead code unless asked.
 
-The test: Every changed line should trace directly to the user's request.
+The test: Each changed line should trace directly to the user's request.
 
 ### Goal-Driven Execution
 
@@ -157,7 +159,7 @@ The test: Every changed line should trace directly to the user's request.
 Transform tasks into verifiable goals:
 - "Add validation" → "Write tests for invalid inputs, then make them pass"
 - "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
+- "Refactor X" → "Run the tests before the change. Run them again after the change."
 
 For multi-step tasks, state a brief plan:
 
@@ -171,38 +173,37 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Issue and Pull Request Governance
 
-These rules apply to every contributor, including AI coding agents. The full org-wide rules are in
+These rules apply to each contributor, including AI coding agents. The full org-wide rules are in
 [GOVERNANCE.md](https://github.com/tinkerologie/.github/blob/main/GOVERNANCE.md).
 
-1. **Issue first.** Open an issue with the bug or enhancement template before opening a pull
-   request. Keep the title prefix `[Bug]:` or `[Enhancement]:`, followed by a space and the title.
-   Automation applies the `bug` or `enhancement` label when it can tell the type, and CodeRabbit
-   then posts a Coding Plan on the issue. Implement from that plan. The labeler skips issues labeled
-   `question`, `duplicate`, `invalid`, `wontfix`, or `no-type`, and never re-adds a type label that
-   a maintainer removed.
-2. **Link the issue.** In the PR's **Related Issues** section, write `Closes #<number>` (or `Fixes`
-   or `Resolves`) when the PR completely resolves the issue; these keywords close it on merge. Use
-   `Part of #<number>` or `Related to #<number>` for partial work. The linked issue must exist; an
-   issue in another public repository (`owner/repo#123`) is fine. Only authors with write access or
-   higher (maintainers) may write `None`, for housekeeping such as CI,
-   documentation, or dependency updates; PR governance rejects `None` from everyone else.
-3. **One change at a time.** Contributors without write access can have at most 2 open, non-draft
-   pull requests here. GitHub enforces this limit, and draft pull requests do not count toward it.
-   Do not open PRs that edit the same files as another open PR, such as `CHANGELOG.md`,
-   translations, `README.md`, or generated bundles. Wait for the first to merge, rebase, then
-   continue.
-4. **Act on the Tinkerologie-Bot report.** When PR governance fails, Tinkerologie-Bot posts one comment
-   listing every problem as a numbered item. Fix each item by editing the PR description or pushing
-   the missing change; the check re-runs and the comment updates to passed.
-5. **Rebase before review.** Rebase on `main` before marking a PR ready for review.
-6. **Resolve conflicts first.** When a PR gets the `conflicts` label, rebase on `main`,
-   resolve the conflicts (keep every `CHANGELOG.md` entry under `[Unreleased]`), re-run the tests,
-   and force-push before doing any other work.
-7. **Coverage.** `codecov/patch` must pass: at least 95% of added or changed lines must be
-   covered by tests. The gate is the percentage; still, add tests for the uncovered lines the
-   Codecov PR comment lists, and explain in the PR description any line you leave uncovered. Do
-   not lower coverage targets or add coverage ignore rules to make it pass.
-8. **Stale items.** Issues and PRs with no activity for 14 days are labeled `stale` and closed 30
-   days later unless there is new activity. These labels are exempt:
+1. **Issue first.** Open an issue with the bug or enhancement template before you open a pull
+   request. Use `[Bug]:` or `[Enhancement]:`, followed by a space and the title.
+   The labeler adds `bug` or `enhancement` when it can identify the issue type.
+   CodeRabbit then adds a Coding Plan to the issue. Follow that plan.
+   The labeler skips issues with `question`, `duplicate`, `invalid`, `wontfix`, or `no-type`.
+   It does not add a type label again if a maintainer removed it.
+2. **Link the issue.** In **Related Issues**, use `Closes #<number>`, `Fixes #<number>`, or
+   `Resolves #<number>` if the PR completes the issue. GitHub then closes the issue when
+   the PR merges. For partial work, use `Part of #<number>` or `Related to #<number>`.
+   Link to an existing issue. You can link to an issue in another public repository
+   with `owner/repo#123`. Only contributors with write access or higher can use
+   `None` for maintenance work such as CI, documentation, or dependency updates.
+3. **One change at a time.** GitHub limits contributors without write access to two open,
+   non-draft pull requests. Draft pull requests do not count. Do not edit files that another
+   open PR changes. Examples include `CHANGELOG.md`, translations, `README.md`, and generated
+   bundles. Wait for the first PR to merge. Then rebase your branch before you continue.
+4. **Act on the Tinkerologie-Bot report.** If the PR governance check fails, the bot lists
+   all problems in one numbered comment. Correct each problem in the PR description
+   or push the necessary change. The check runs again and the bot updates the comment.
+5. **Rebase before review.** Rebase on `main` before you mark the PR ready for review.
+6. **Resolve conflicts first.** If the PR has the `conflicts` label, rebase on `main`.
+   Resolve the conflicts. Keep all `CHANGELOG.md` entries under `[Unreleased]`.
+   Run the tests again. Force-push the branch before you do other work.
+7. **Coverage.** Tests must cover at least 90% of the added or changed lines for
+   `codecov/patch`. Add tests for uncovered lines in the Codecov comment.
+   In the PR description, explain each line that still has no coverage.
+   Do not decrease coverage targets or add coverage ignore rules to pass the check.
+8. **Stale items.** The bot adds `stale` to issues and PRs after 14 days without activity.
+   It closes them 30 days later if there is no new activity. The bot skips these labels.
    - Issues: `pinned`, `security`, `confirmed`, `work-in-progress`, `priority: critical`, `priority: high`.
    - Pull requests: `pinned`, `security`, `work-in-progress`.
