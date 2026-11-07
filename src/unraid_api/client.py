@@ -14,6 +14,7 @@ from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 
+from unraid_api._docker_inventory import build_container_query, decode_containers
 from unraid_api.capabilities import ServerCapabilities, build_introspection_query
 from unraid_api.exceptions import (
     UnraidAPIError,
@@ -1494,119 +1495,7 @@ class UnraidClient:
             List of DockerContainer models.
 
         """
-        from unraid_api.models import DockerContainer
-
-        caps = await self.get_capabilities()
-        query_str = self._build_containers_query(caps)
-        result = await self.query(query_str)
-        containers = (result.get("docker") or {}).get("containers", []) or []
-        return [DockerContainer.from_api_response(c) for c in containers]
-
-    def _build_containers_query(self, caps: ServerCapabilities) -> str:
-        """Compose a docker.containers GraphQL query from capabilities.
-
-        Core fields that every Unraid API version has exposed are always
-        included. Every other field is gated on introspection so an old
-        server never sees a field it cannot resolve. In permissive mode
-        (introspection unavailable) every optional field is requested.
-        """
-
-        def has(field: str) -> bool:
-            return caps.has(f"DockerContainer.{field}")
-
-        def ts_has(field: str) -> bool:
-            return caps.has(f"TailscaleStatus.{field}")
-
-        core = [
-            "id",
-            "names",
-            "image",
-            "imageId",
-            "state",
-            "status",
-            "autoStart",
-        ]
-        extended_scalar = [
-            f
-            for f in (
-                "isUpdateAvailable",
-                "isOrphaned",
-                "webUiUrl",
-                "iconUrl",
-                "command",
-                "created",
-                "sizeRootFs",
-                "sizeRw",
-                "sizeLog",
-                "autoStartOrder",
-                "autoStartWait",
-                "shell",
-                "templatePath",
-                "projectUrl",
-                "registryUrl",
-                "supportUrl",
-                "tailscaleEnabled",
-                "isRebuildReady",
-                "lanIpPorts",
-                "labels",
-                "networkSettings",
-                "mounts",
-            )
-            if has(f)
-        ]
-
-        fragments: list[str] = list(core) + extended_scalar
-
-        if has("ports"):
-            fragments.append("ports { ip privatePort publicPort type }")
-        if has("templatePorts"):
-            fragments.append("templatePorts { ip privatePort publicPort type }")
-        if has("hostConfig"):
-            fragments.append("hostConfig { networkMode }")
-
-        if has("tailscaleStatus"):
-            ts_fields = [
-                f
-                for f in (
-                    "hostname",
-                    "dnsName",
-                    "online",
-                    "version",
-                    "latestVersion",
-                    "updateAvailable",
-                    "relay",
-                    "relayName",
-                    "tailscaleIps",
-                    "primaryRoutes",
-                    "isExitNode",
-                    "webUiUrl",
-                    "keyExpiry",
-                    "keyExpiryDays",
-                    "keyExpired",
-                    "backendState",
-                    "authUrl",
-                )
-                if ts_has(f)
-            ]
-            if ts_has("exitNodeStatus"):
-                ts_fields.append("exitNodeStatus { online tailscaleIps }")
-            # Always include `online` as a baseline if nothing else matched
-            # (old servers exposed at minimum a boolean-shaped status).
-            if not ts_fields:
-                ts_fields = ["online"]
-            fragments.append("tailscaleStatus { " + " ".join(ts_fields) + " }")
-
-        indent = "                        "
-        body = ("\n" + indent).join(fragments)
-        return (
-            "query {\n"
-            "            docker {\n"
-            "                containers {\n"
-            f"                    {body}\n"
-            "                }\n"
-            "            }\n"
-            "        }"
-        )
+        return await self._read_typed_containers(polling=False)
 
     async def typed_get_containers_safe(self) -> list[DockerContainer]:
         """Get Docker containers WITHOUT expensive fields (safe for polling).
@@ -1626,62 +1515,12 @@ class UnraidClient:
             List of DockerContainer models with only cheap scalar fields.
 
         """
-        from unraid_api.models import DockerContainer
+        return await self._read_typed_containers(polling=True)
 
+    async def _read_typed_containers(self, *, polling: bool) -> list[DockerContainer]:
         caps = await self.get_capabilities()
-        query_str = self._build_containers_query_safe(caps)
-        result = await self.query(query_str)
-        containers = (result.get("docker") or {}).get("containers", []) or []
-        return [DockerContainer.from_api_response(c) for c in containers]
-
-    def _build_containers_query_safe(self, caps: ServerCapabilities) -> str:
-        """Compose a lightweight docker.containers query from capabilities.
-
-        Requests only cheap scalar fields. Expensive fields (sizeRootFs,
-        sizeRw, sizeLog), heavy payloads (mounts, networkSettings, labels)
-        and nested selections (ports, templatePorts, hostConfig,
-        tailscaleStatus) are never included, regardless of capabilities.
-        """
-
-        def has(field: str) -> bool:
-            return caps.has(f"DockerContainer.{field}")
-
-        core = [
-            "id",
-            "names",
-            "image",
-            "imageId",
-            "state",
-            "status",
-            "autoStart",
-        ]
-        extended_scalar = [
-            f
-            for f in (
-                "autoStartOrder",
-                "isUpdateAvailable",
-                "iconUrl",
-                "webUiUrl",
-                "projectUrl",
-                "registryUrl",
-                "supportUrl",
-                "tailscaleEnabled",
-            )
-            if has(f)
-        ]
-
-        fragments = core + extended_scalar
-        indent = "                        "
-        body = ("\n" + indent).join(fragments)
-        return (
-            "query {\n"
-            "            docker {\n"
-            "                containers {\n"
-            f"                    {body}\n"
-            "                }\n"
-            "            }\n"
-            "        }"
-        )
+        result = await self.query(build_container_query(caps, polling=polling))
+        return decode_containers(result)
 
     async def typed_get_vms(self) -> list[VmDomain]:
         """Get all virtual machines as Pydantic models.

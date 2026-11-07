@@ -51,6 +51,7 @@ from graphql import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from unraid_api._docker_inventory import build_container_query  # noqa: E402
 from unraid_api.capabilities import (  # noqa: E402
     ServerCapabilities,
     build_introspection_query,
@@ -65,7 +66,8 @@ if TYPE_CHECKING:
 
 CLIENT_PATH = "src/unraid_api/client.py"
 CAPABILITIES_PATH = "src/unraid_api/capabilities.py"
-SOURCE_PATHS: tuple[str, ...] = (CLIENT_PATH, CAPABILITIES_PATH)
+DOCKER_INVENTORY_PATH = "src/unraid_api/_docker_inventory.py"
+SOURCE_PATHS: tuple[str, ...] = (CLIENT_PATH, CAPABILITIES_PATH, DOCKER_INVENTORY_PATH)
 
 UPSTREAM_REPO = "unraid/api"
 UPSTREAM_SCHEMA_PATH = "api/generated-schema.graphql"
@@ -323,14 +325,6 @@ def _render_client(caps: ServerCapabilities) -> UnraidClient:
     return client
 
 
-def _render_containers(caps: ServerCapabilities) -> str:
-    return _render_client(caps)._build_containers_query(caps)
-
-
-def _render_containers_safe(caps: ServerCapabilities) -> str:
-    return _render_client(caps)._build_containers_query_safe(caps)
-
-
 class _Sent(Exception):
     """Raised by the recording transport once the document has been sent."""
 
@@ -386,8 +380,18 @@ class DynamicSource:
 
 
 DYNAMIC_REGISTRY: tuple[DynamicSource, ...] = (
-    DynamicSource("_build_containers_query", CLIENT_PATH, _render_containers),
-    DynamicSource("_build_containers_query_safe", CLIENT_PATH, _render_containers_safe),
+    DynamicSource(
+        "build_container_query",
+        DOCKER_INVENTORY_PATH,
+        functools.partial(build_container_query, polling=False),
+        methods=("typed_get_containers",),
+    ),
+    DynamicSource(
+        "build_container_query",
+        DOCKER_INVENTORY_PATH,
+        functools.partial(build_container_query, polling=True),
+        methods=("typed_get_containers_safe",),
+    ),
     DynamicSource("typed_get_vms", CLIENT_PATH, _render_vms),
     # One literal document; the field is swapped per public method at runtime.
     DynamicSource(
