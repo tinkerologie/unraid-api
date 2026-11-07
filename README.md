@@ -295,7 +295,8 @@ use the Unraid Core storage workflow instead.
 | `get_containers()` | `list[dict]` | Docker containers |
 | `get_vms()` | `list[dict]` | Virtual machines |
 | `get_ups_status()` | `list[dict]` | UPS devices |
-| `get_notifications()` | `list[dict]` | Notifications |
+| `get_notifications()` | `dict` | Raw notification overview and list |
+| `typed_get_notifications()` | `list[Notification]` | One filtered page of notifications, with normalized timestamps. Malformed items are skipped and a missing or invalid page raises `UnraidAPIError`. |
 | `get_parity_history()` | `list[dict]` | Parity check history |
 | `get_services()` | `list[dict]` | System services |
 | `get_plugins()` | `list[dict]` | Installed plugins |
