@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-11-07
+
 ### Added
+
+- Add `typed_get_notifications()` for paginated unread and archived notifications, using the same models as notification subscriptions. The legacy mapping reader keeps its existing interface ([#159](https://github.com/tinkerologie/unraid-api/issues/159)).
 
 - Contributor domain glossary and numbered records of existing architecture decisions, with links to implementation and regression tests.
 

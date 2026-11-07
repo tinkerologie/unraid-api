@@ -2899,6 +2899,42 @@ class UnraidClient:
             Notifications data including overview and list.
 
         """
+        result = await self._query_notifications(notification_type, limit, offset)
+        return dict(result.get("notifications", {}))
+
+    async def typed_get_notifications(
+        self,
+        notification_type: str = "UNREAD",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Notification]:
+        """Read one page of unread or archived notifications.
+
+        Invalid items are skipped. A missing, null, or malformed page raises
+        UnraidAPIError, while a valid empty page returns an empty list.
+        """
+        from pydantic import ValidationError
+
+        from unraid_api.models import Notification
+
+        result = await self._query_notifications(notification_type, limit, offset)
+        root = result.get("notifications")
+        items = root.get("list") if isinstance(root, dict) else None
+        if not isinstance(items, list):
+            raise UnraidAPIError("Invalid notification inventory response")
+
+        notifications: list[Notification] = []
+        for item in items:
+            try:
+                notifications.append(Notification.model_validate(item))
+            except ValidationError:
+                _LOGGER.debug("Skipping invalid notification inventory item")
+        return notifications
+
+    async def _query_notifications(
+        self, notification_type: str, limit: int, offset: int
+    ) -> dict[str, Any]:
+        """Execute the notification inventory operation for both readers."""
         query_str = """
             query GetNotifications(
                 $type: NotificationType!
@@ -2924,11 +2960,10 @@ class UnraidClient:
                 }
             }
         """
-        result = await self.query(
+        return await self.query(
             query_str,
             {"type": notification_type, "limit": limit, "offset": offset},
         )
-        return dict(result.get("notifications", {}))
 
     # =========================================================================
     # Additional Docker Methods
