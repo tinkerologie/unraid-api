@@ -4,7 +4,7 @@ Use [ASD-STE100 Issue 9](docs/agents/documentation.md) for new or changed Englis
 
 Thank you for your interest in contributing to Unraid API Python Library. This project welcomes contributions from human developers and autonomous AI coding agents alike.
 
-Python client library and CLI for interacting with the Unraid Management Agent REST/WebSocket API.
+This project supplies a Python client and CLI for the Unraid GraphQL API. The client uses HTTP for queries and mutations. It uses WebSocket for subscriptions.
 
 All contributors must follow this workflow. It helps maintainers review changes and maintain code quality.
 

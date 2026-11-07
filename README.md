@@ -317,8 +317,8 @@ Use the Unraid Core storage workflow.
 | `pause_parity_check()` | Pause parity check |
 | `resume_parity_check()` | Resume parity check |
 | `cancel_parity_check()` | Cancel parity check |
-| `spin_up_disk(id)` | Start disk rotation |
-| `spin_down_disk(id)` | Stop disk rotation |
+| `spin_up_disk(id)` | Spin up the disk |
+| `spin_down_disk(id)` | Spin down the disk |
 | `update_container(id)` | Update container to latest image |
 | `update_containers(ids)` | Update selected containers (API 4.35.0+) |
 | `update_all_containers()` | Update each container with a pending update (API 4.35.0+) |

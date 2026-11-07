@@ -6,7 +6,7 @@ It uses the result to select fields and prevent requests that the server does no
 
 If the server returns `INTROSPECTION_DISABLED`, the client uses the current field set and omits obsolete fields.
 For other introspection failures, the client permits requests without a list of supported fields.
-If authentication fails, the client returns the error to the caller.
+If authentication fails, the client raises `UnraidAuthenticationError`.
 
 The client can operate when introspection is not available.
 In that case, an operation can fail if the server does not support the requested field.
