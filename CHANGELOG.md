@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Contributor domain glossary and numbered records of existing architecture decisions, with links to implementation and regression tests.
+
 ## [1.15.1] - 2026-11-01
 
 ### Fixed

@@ -464,3 +464,9 @@ Contributions welcome! Please ensure:
 - [Official Unraid API Repository](https://github.com/unraid/api)
 - [GraphQL API Reference](UNRAIDAPI.md)
 - [PyPI Package](https://pypi.org/project/unraid-api/)
+
+## Domain and architecture
+
+Contributor terminology is defined in [GLOSSARY.md](GLOSSARY.md). Existing
+architecture decisions and their source evidence are indexed in
+[docs/adr/README.md](docs/adr/README.md).
