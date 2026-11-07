@@ -1,35 +1,37 @@
 # Contributing to Unraid API Python Library
 
+Use [ASD-STE100 Issue 9](docs/agents/documentation.md) for new or changed English documentation.
+
 Thank you for your interest in contributing to Unraid API Python Library. This project welcomes contributions from human developers and autonomous AI coding agents alike.
 
 Python client library and CLI for interacting with the Unraid Management Agent REST/WebSocket API.
 
-To maintain code quality, protect maintainer capacity, and prevent maintainer burnout, all contributors must follow the standardized development and governance workflow outlined below.
+All contributors must follow this workflow. It helps maintainers review changes and maintain code quality.
 
 ---
 
 ## Code of Conduct and Standards
 
 - Be respectful, constructive, and collaborative.
-- Zero secrets policy: Never commit passwords, tokens, API keys, private certificates, or personal data.
+- Zero secrets policy: Do not commit passwords, tokens, API keys, private certificates, or personal data.
 - Anti-burnout principle: Perform full due diligence locally before opening pull requests or requesting review.
 
 ---
 
 ## Development Workflow
 
-All contributions—whether submitted by humans or AI agents—must adhere to this step-by-step workflow:
+All contributors and AI agents must follow these steps.
 
 ### 1. Open a GitHub Issue First
-- Every bug fix, feature, or enhancement must start with an issue.
+- Each bug fix, feature, or enhancement must start with an issue.
 - Use the appropriate GitHub Issue Form:
   - Bug Report (`01-bug-report.yml`)
   - Enhancement Request (`02-enhancement-request.yml`)
 - Blank or unstructured issues are disabled. Pull requests without a corresponding issue will be closed.
 
 ### 2. CodeRabbit AI Plan Generation
-- Once the issue is created, CodeRabbit AI is triggered to generate an implementation plan (either automatically via the `bug` or `enhancement` label, or by commenting `@coderabbitai plan` on the issue).
-- CodeRabbit analyzes the codebase and posts a comprehensive Coding Plan containing:
+- CodeRabbit can make a plan when GitHub adds the `bug` or `enhancement` label. To start it manually, add the comment `@coderabbitai plan` to the issue.
+- CodeRabbit examines the code and posts a Coding Plan. The plan includes these items.
   - Codebase research and affected components
   - Architectural design choices
   - Phased task breakdowns
@@ -41,12 +43,12 @@ All contributions—whether submitted by humans or AI agents—must adhere to th
   - Features: `git checkout -b feat/<issue-number>-<short-description>`
   - Fixes: `git checkout -b fix/<issue-number>-<short-description>`
   - Documentation: `git checkout -b docs/<issue-number>-<short-description>`
-- Never commit directly to the default branch (`main`).
+- Do not commit directly to the default branch (`main`).
 
 ### 4. Implementation and Local Validation
 - Implement changes following project conventions and the approved plan.
 - Update `CHANGELOG.md` under `## [Unreleased]` describing what changed and why.
-- Run all required local validation checks (tests with coverage, linters, type checkers, and formatters). Ensure all checks pass with zero errors and zero warnings.
+- Run all required local validation checks (tests with coverage, linters, type checkers, and formatters). Correct all errors and warnings.
 
 ### 5. Follow the Pull Request Template
 - Open a Pull Request using `.github/PULL_REQUEST_TEMPLATE.md`.
@@ -54,16 +56,16 @@ All contributions—whether submitted by humans or AI agents—must adhere to th
   - Summary of changes
   - Linked issue keywords (`Fixes #<issue>`, `Closes #<issue>`, `Addresses #<issue>`)
   - Verification steps and pasted terminal output
-  - Mandatory Pre-Submission Governance checklist (every box must be checked)
+  - Mandatory Pre-Submission Governance checklist (each box must be checked)
 
 ### 6. Open PR as DRAFT First
 - Pull requests MUST be opened in Draft mode (`gh pr create --draft` or choose "Create draft pull request" in GitHub).
 - Draft PRs allow CI workflows to run in isolation without triggering premature reviewer notifications or consuming unnecessary review capacity.
-- Verify that all CI checks pass in draft mode and confirm that everything is working as expected from your end.
+- Wait for all CI checks to pass on the draft. Make sure the change works locally.
 
 ### 7. Mark Ready for Review
 - Only after all local and draft CI checks have succeeded, convert the pull request to "Ready for Review".
-- Pull requests marked ready for review with failing checks, incomplete templates, or unverified changes will be converted back to draft or closed.
+- The project can return a PR to draft or close it. This can occur if checks fail or the PR has missing template fields or verification.
 
 ### 8. Automated Quality Gates and Merge Criteria
 Before a pull request can be merged, it must satisfy all automated quality gates:
@@ -79,7 +81,7 @@ Before a pull request can be merged, it must satisfy all automated quality gates
 ### Prerequisites and Setup
 
 - Python 3.11 or later
-- Dependencies installed via `uv sync` or `pip install -e ".[test,dev]"`
+- Dependencies installed through `uv sync` or `pip install -e ".[test,dev]"`
 - Pre-commit (`pre-commit install`)
 
 ### Validation Commands
@@ -106,45 +108,50 @@ pre-commit run --all-files
 
 ## Upstream Watch
 
-The `Upstream watch` workflow (`.github/workflows/upstream-watch.yml`) tracks
-[unraid/api](https://github.com/unraid/api) so upstream changes reach this library early. It runs
-at 02:00 Australia/Brisbane on the 1st and 15th of each month, and on demand from the Actions tab
-(`workflow_dispatch`, with optional `since`/`until` release tags).
+The `Upstream watch` workflow (`.github/workflows/upstream-watch.yml`) monitors
+[unraid/api](https://github.com/unraid/api) for changes.
+It runs at 02:00 Australia/Brisbane on the first and fifteenth day of each month.
+To start it manually, use the Actions tab (`workflow_dispatch`).
+You can specify the `since` and `until` release tags.
 
-It never writes to unraid/api: the scan only reads public data, issues are opened only in this
-repository (the report job refuses any other repository and runs only on `main` here), and
-upstream PR links go through `redirect.github.com`, so GitHub adds no "mentioned this" entries
-to upstream issues or PRs.
+The scan reads only public data. The report job creates issues only on `main` in this repository.
+It uses `redirect.github.com` for upstream PR links. This prevents GitHub from adding "mentioned this" entries upstream.
 
 - **Scan job** (read-only): `script/upstream_watch.py scan` diffs `api/generated-schema.graphql`
-  between consecutive new release tags and from the latest release to `main`, validates every
-  library operation against each new schema with `graphql.validate`, maps changed fields to the
-  library methods and `file:line` that select them, and flags release notes and linked PRs that
-  change request handling (introspection, request limits, auth, rate limiting, error shapes). It
-  writes one JSON report.
-- **Report job** (`issues: write` only): opens one issue per finding group and writes the report to
-  the job summary, which lists every release and change checked, including those that need no
-  action.
+  between each pair of consecutive new release tags. It also compares the latest release with `main`.
+  The job uses `graphql.validate` to validate each library operation against each new schema.
+  It lists the library methods and `file:line` locations that select changed fields.
+  It flags release notes and linked PRs about introspection, request limits,
+  authentication, rate limiting, or error formats. It writes one JSON report.
+- **Report job** (`issues: write` only). The job opens one issue for each group of findings.
+  It writes a summary of all releases and changes it checked, including changes that need no action.
 
-**Labels.** Breaking changes (an operation no longer validates; a field or root the library
-selects was removed or became nullable; or an input type or enum the library sends in variables
-lost a field or value, changed a field's type, or gained a required field or lost a default on a
-non-null field) and behaviour changes open a `bug` + `upstream` issue. New types, fields and root
-fields, and new deprecations, open an `enhancement` + `upstream` issue. The
-job creates a missing label before use, and sets labels in the create call, because issues opened
-with `GITHUB_TOKEN` do not trigger the issue labeler.
+**Labels.** The report job opens an issue with `bug` and `upstream` for a behavior change
+or one of these breaking changes.
+
+- An operation fails schema validation.
+- The schema removes a selected field or root, or changes it to nullable.
+- An input type or enum in the library's variables loses a field or value.
+- An input field changes type, or an input type adds a required field.
+- A non-null input field loses its default.
+
+The job uses `enhancement` and `upstream` for new types, fields, root fields, and deprecations.
+It creates each missing label before use. It sets the labels when it creates the issue.
+Issues that use `GITHUB_TOKEN` do not start the issue labeler.
 
 **Markers and state.** Each issue body starts with hidden markers: `<!-- upstream-group: ... -->`,
 `<!-- upstream-release: vX.Y.Z -->` (or `<!-- upstream-main: <sha> -->`) and one
-`<!-- upstream-change: <id> -->` per change. Only markers in issues authored by
-`github-actions[bot]` count, open or closed, so closing an issue does not reopen it, and a change
-first reported from `main` is not reported again when it ships in a release. The closed
-`Upstream watch state` issue (label `upstream`) records the last processed release and `main`
-commit, and is the only source of the scan cursor; the report job updates it last, so a run that
-fails midway is retried in full. Leave it closed and do not edit its markers. A group whose markers
+`<!-- upstream-change: <id> -->` per change. The job uses markers only from
+`github-actions[bot]` issues.
+
+The job checks open and closed issues. It does not reopen issues you close. It does not report a change from `main` again when a release includes it.
+
+The closed `Upstream watch state` issue (label `upstream`) records the last release and
+`main` commit that the job processed. The scanner reads its cursor only from this issue. The report job updates the issue last.
+If a run fails before this update, the next run repeats the scan. Leave it closed and do not edit its markers. A group whose markers
 would not fit in one issue body is split into numbered parts.
 
-Run the scan locally (read-only; writes only the report file):
+Run the scan locally. It writes only the report file.
 
 ```bash
 GITHUB_TOKEN=$(gh auth token) uv run --all-extras python script/upstream_watch.py scan \
@@ -158,8 +165,8 @@ uv run --all-extras python scripts/validate-schema.py --schema-file generated-sc
 uv run --all-extras python scripts/validate-schema.py --api-version 4.37.9 --schema-only
 ```
 
-Without these options, `validate-schema.py` fetches the upstream SDL for the server's API version;
-`--introspect` keeps the old live-introspection path.
+Without these options, `validate-schema.py` gets the upstream SDL for the server's API version.
+Use `--introspect` to read the schema directly from the server.
 
 ---
 
@@ -185,38 +192,37 @@ We follow Conventional Commits:
 
 ## Issue and Pull Request Governance
 
-These rules apply to every contributor, including AI coding agents. The full org-wide rules are in
+These rules apply to each contributor, including AI coding agents. The full org-wide rules are in
 [GOVERNANCE.md](https://github.com/tinkerologie/.github/blob/main/GOVERNANCE.md).
 
-1. **Issue first.** Open an issue with the bug or enhancement template before opening a pull
-   request. Keep the title prefix `[Bug]:` or `[Enhancement]:`, followed by a space and the title.
-   Automation applies the `bug` or `enhancement` label when it can tell the type, and CodeRabbit
-   then posts a Coding Plan on the issue. Implement from that plan. The labeler skips issues labeled
-   `question`, `duplicate`, `invalid`, `wontfix`, or `no-type`, and never re-adds a type label that
-   a maintainer removed.
-2. **Link the issue.** In the PR's **Related Issues** section, write `Closes #<number>` (or `Fixes`
-   or `Resolves`) when the PR completely resolves the issue; these keywords close it on merge. Use
-   `Part of #<number>` or `Related to #<number>` for partial work. The linked issue must exist; an
-   issue in another public repository (`owner/repo#123`) is fine. Only authors with write access or
-   higher (maintainers) may write `None`, for housekeeping such as CI,
-   documentation, or dependency updates; PR governance rejects `None` from everyone else.
-3. **One change at a time.** Contributors without write access can have at most 2 open, non-draft
-   pull requests here. GitHub enforces this limit, and draft pull requests do not count toward it.
-   Do not open PRs that edit the same files as another open PR, such as `CHANGELOG.md`,
-   translations, `README.md`, or generated bundles. Wait for the first to merge, rebase, then
-   continue.
-4. **Act on the Tinkerologie-Bot report.** When PR governance fails, Tinkerologie-Bot posts one comment
-   listing every problem as a numbered item. Fix each item by editing the PR description or pushing
-   the missing change; the check re-runs and the comment updates to passed.
-5. **Rebase before review.** Rebase on `main` before marking a PR ready for review.
-6. **Resolve conflicts first.** When a PR gets the `conflicts` label, rebase on `main`,
-   resolve the conflicts (keep every `CHANGELOG.md` entry under `[Unreleased]`), re-run the tests,
-   and force-push before doing any other work.
-7. **Coverage.** `codecov/patch` must pass: at least 95% of added or changed lines must be
-   covered by tests. The gate is the percentage; still, add tests for the uncovered lines the
-   Codecov PR comment lists, and explain in the PR description any line you leave uncovered. Do
-   not lower coverage targets or add coverage ignore rules to make it pass.
-8. **Stale items.** Issues and PRs with no activity for 14 days are labeled `stale` and closed 30
-   days later unless there is new activity. These labels are exempt:
+1. **Issue first.** Open an issue with the bug or enhancement template before you open a pull
+   request. Use `[Bug]:` or `[Enhancement]:`, followed by a space and the title.
+   The labeler adds `bug` or `enhancement` when it can identify the issue type.
+   CodeRabbit then adds a Coding Plan to the issue. Follow that plan.
+   The labeler skips issues with `question`, `duplicate`, `invalid`, `wontfix`, or `no-type`.
+   It does not add a type label again if a maintainer removed it.
+2. **Link the issue.** In **Related Issues**, use `Closes #<number>`, `Fixes #<number>`, or
+   `Resolves #<number>` if the PR completes the issue. GitHub then closes the issue when
+   the PR merges. For partial work, use `Part of #<number>` or `Related to #<number>`.
+   Link to an existing issue. You can link to an issue in another public repository
+   with `owner/repo#123`. Only contributors with write access or higher can use
+   `None` for maintenance work such as CI, documentation, or dependency updates.
+3. **One change at a time.** GitHub limits contributors without write access to two open,
+   non-draft pull requests. Draft pull requests do not count. Do not edit files that another
+   open PR changes. Examples include `CHANGELOG.md`, translations, `README.md`, and generated
+   bundles. Wait for the first PR to merge. Then rebase your branch before you continue.
+4. **Act on the Tinkerologie-Bot report.** If the PR governance check fails, the bot lists
+   all problems in one numbered comment. Correct each problem in the PR description
+   or push the necessary change. The check runs again and the bot updates the comment.
+5. **Rebase before review.** Rebase on `main` before you mark the PR ready for review.
+6. **Resolve conflicts first.** If the PR has the `conflicts` label, rebase on `main`.
+   Resolve the conflicts. Keep all `CHANGELOG.md` entries under `[Unreleased]`.
+   Run the tests again. Force-push the branch before you do other work.
+7. **Coverage.** Tests must cover at least 90% of the added or changed lines for
+   `codecov/patch`. Add tests for uncovered lines in the Codecov comment.
+   In the PR description, explain each line that still has no coverage.
+   Do not decrease coverage targets or add coverage ignore rules to pass the check.
+8. **Stale items.** The bot adds `stale` to issues and PRs after 14 days without activity.
+   It closes them 30 days later if there is no new activity. The bot skips these labels.
    - Issues: `pinned`, `security`, `confirmed`, `work-in-progress`, `priority: critical`, `priority: high`.
    - Pull requests: `pinned`, `security`, `work-in-progress`.

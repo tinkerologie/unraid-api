@@ -109,14 +109,14 @@ async with UnraidClient(host, api_key) as client:
 
 For an encrypted array, replace `start_array()` above with
 `start_array(decryption_password=password)` or
-`start_array(decryption_keyfile=keyfile_contents)`. Keyfiles are data URLs or raw
-base64 contents, not paths. Decryption values require an HTTPS connection;
-HTTP destinations and redirects are rejected before transmitting them. Certificate
-verification must be enabled. For private certificates, configure system trust
-roots or `SSL_CERT_FILE`/`SSL_CERT_DIR`; encrypted starts enforce that trust even
-when using an injected session. Configure the canonical HTTPS hostname and port
-for encrypted starts: they bypass HTTP discovery, ignore cached destinations, and
-reject redirects pointing at a different server or port.
+`start_array(decryption_keyfile=keyfile_contents)`.
+Give the keyfile contents as a data URL or as raw base64. Use HTTPS with certificate verification.
+For private certificates, configure system trust roots, `SSL_CERT_FILE`, or `SSL_CERT_DIR`.
+
+Configure the canonical HTTPS hostname and port.
+For an encrypted start, the client skips HTTP discovery and ignores cached destinations.
+It rejects HTTP destinations and redirects to a different server or port before it sends decryption values.
+It checks certificate trust even if you supply a session.
 
 ### Session Injection (Home Assistant)
 
@@ -153,11 +153,11 @@ async with UnraidClient(host, api_key) as client:
         print(f"Array state: {data['state']}")
 ```
 
-A subscription that receives no message for `timeout * 10` seconds (300 s with the default `timeout=30`) raises `UnraidTimeoutError`. This is normal for rare events on a quiet server, such as notifications or UPS changes; catch it and reconnect.
+A subscription raises `UnraidTimeoutError` after `timeout * 10` seconds without a message. The default is 300 seconds. This can occur on a quiet server for infrequent events such as notifications or UPS changes. Catch the exception. Then reconnect.
 
 ## Pydantic Models
 
-Response data can be parsed into typed models:
+Use typed models to read response data.
 
 ```python
 from unraid_api.models import DockerContainer, VmDomain, UnraidArray
@@ -208,7 +208,7 @@ async with UnraidClient(host, api_key) as client:
 |--------|-------------|
 | `test_connection()` | Test if server is reachable |
 | `get_version()` | Get Unraid and API version |
-| `supports_standby_safe_temperature_metrics(version=None)` | `True` for API >= 4.37.6; unknown versions fail closed |
+| `supports_standby_safe_temperature_metrics(version=None)` | `True` for API >= 4.37.6. The helper returns `False` for unknown versions. |
 | `get_server_info()` | Get server info for device registration |
 | `query(query, variables)` | Execute GraphQL query |
 | `mutate(mutation, variables)` | Execute GraphQL mutation |
@@ -263,27 +263,19 @@ else:
 
 The helper compares only the API version, fails closed on unknown versions and
 does not cache. Recheck the version after reconnecting or upgrading the API plugin.
-Continue to avoid polling `get_physical_disks()`, even with `include_smart=False`:
-that query still wakes disks on 4.37.6 pending
-[unraid/api#2105](https://github.com/unraid/api/issues/2105). Use `get_array_disks()`.
+Use `get_array_disks()` for polling. Do not poll `get_physical_disks()`. On API 4.37.6, the query wakes disks even with `include_smart=False`. See [unraid/api#2105](https://github.com/unraid/api/issues/2105).
 
 `restart_container()` returns raw `docker.restart` data on the native path or
 `docker.start` data on the fallback path. Its `delay` argument applies only to
-the fallback. If introspection fails, permissive capabilities optimistically
-attempt native restart. `typed_get_vms()` requests `uuid` only when introspection confirms support;
-unknown schemas omit it to preserve VM listing.
+the fallback. If introspection fails, the permissive capability policy lets the client try a native restart.
+`typed_get_vms()` requests `uuid` when introspection confirms support. With an unknown schema, it omits `uuid` so it can list VMs.
 
-Unraid API 4.37.8 and later refuse schema introspection unless the developer
-sandbox is enabled. The client recognises the `INTROSPECTION_DISABLED` response
-and treats the server as current: every field is available except those in
-`RETIRED_FIELDS`, so VM UUIDs are still requested. On these servers a failed
-Docker or VM service raises `UnraidAPIError`; the readers never return an empty
-list for it.
+Unraid API 4.37.8 and later refuse schema introspection unless you enable the developer sandbox. The client treats `INTROSPECTION_DISABLED` as a current schema. It assumes support for all fields outside `RETIRED_FIELDS`, so it requests VM UUIDs. If the Docker or VM service fails, the reader raises `UnraidAPIError`.
 
 Plugin and language installs modify the server. Follow their returned operation
 with `subscribe_plugin_install_updates(operation.id)`. `remove_array_disk()`
-emits `DeprecationWarning` and rejects servers without the retired mutation;
-use the Unraid Core storage workflow instead.
+emits `DeprecationWarning` and rejects servers without the retired mutation.
+Use the Unraid Core storage workflow.
 
 #### Raw Data Methods
 
@@ -310,26 +302,26 @@ use the Unraid Core storage workflow instead.
 |--------|-------------|
 | `start_container(id)` | Start Docker container |
 | `stop_container(id)` | Stop Docker container |
-| `restart_container(id)` | Native Docker restart when supported; stop/wait/start fallback on older servers |
+| `restart_container(id)` | Native restart when the API supports it. Otherwise, stop, wait, and start. |
 | `start_vm(id)` | Start VM |
 | `stop_vm(id)` | Stop VM (graceful) |
 | `force_stop_vm(id)` | Force stop VM |
 | `pause_vm(id)` | Pause VM |
 | `resume_vm(id)` | Resume paused VM |
-| `start_array(decryption_password=..., decryption_keyfile=...)` | Start disk array; optional password or keyfile contents (data URL/base64, not a path) |
+| `start_array(decryption_password=..., decryption_keyfile=...)` | Start the array. An encrypted array can use a password or keyfile contents (data URL or base64). |
 | `stop_array()` | Stop disk array |
-| `remove_array_disk(id)` | Deprecated: direct removal was retired upstream; use Unraid Core storage workflows |
-| `install_plugin(url, name=..., forced=...)` | Install plugin software; returns `PluginInstallOperation` |
-| `install_language(url, name=..., forced=...)` | Install software from a language-pack URL, not a language code; returns `PluginInstallOperation` |
+| `remove_array_disk(id)` | Deprecated. Use the Unraid Core storage workflow. |
+| `install_plugin(url, name=..., forced=...)` | Install plugin software. Returns `PluginInstallOperation`. |
+| `install_language(url, name=..., forced=...)` | Install a language pack from its URL. Returns `PluginInstallOperation`. |
 | `start_parity_check(correct)` | Start parity check |
 | `pause_parity_check()` | Pause parity check |
 | `resume_parity_check()` | Resume parity check |
 | `cancel_parity_check()` | Cancel parity check |
-| `spin_up_disk(id)` | Spin up disk |
-| `spin_down_disk(id)` | Spin down disk |
+| `spin_up_disk(id)` | Start disk rotation |
+| `spin_down_disk(id)` | Stop disk rotation |
 | `update_container(id)` | Update container to latest image |
 | `update_containers(ids)` | Update selected containers (API 4.35.0+) |
-| `update_all_containers()` | Update every container with a pending update (API 4.35.0+) |
+| `update_all_containers()` | Update each container with a pending update (API 4.35.0+) |
 | `update_container_autostart(entries)` | Update container autostart configuration (API 4.37.0+) |
 | `refresh_docker_digests()` | Re-check remote image digests ("check for updates", API 4.35.0+) |
 
@@ -451,11 +443,11 @@ uv run mypy src/
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE) for details. Earlier releases were MIT licensed; see [NOTICE](NOTICE).
+Apache License 2.0 - see [LICENSE](LICENSE) for details. Earlier releases use the MIT license. See [NOTICE](NOTICE).
 
 ## Contributing
 
-Contributions welcome! Please ensure:
+Contributions welcome! Please make sure:
 1. Tests are written first (TDD)
 2. No linting errors (`ruff check . && mypy src/`)
 3. GraphQL variables used (no string interpolation)

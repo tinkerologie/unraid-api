@@ -4,7 +4,7 @@
 > **Unraid Version:** 7.3.x+
 > **Last Updated:** September 2026
 
-This document provides a comprehensive reference for the Unraid GraphQL API, sourced from the official [unraid/api](https://github.com/unraid/api) repository.
+This reference describes the Unraid GraphQL API. It uses information from the official [unraid/api](https://github.com/unraid/api) repository.
 
 ## Table of Contents
 
@@ -52,9 +52,9 @@ mutation {
 
 | Scalar | Description |
 |--------|-------------|
-| `PrefixedID` | ID prefixed with server identifier (e.g., `server123:resource456`) |
+| `PrefixedID` | ID prefixed with server identifier (for example, `server123:resource456`) |
 | `BigInt` | Non-fractional signed whole numeric values |
-| `DateTime` | UTC date-time string (e.g., `2019-12-03T09:54:33Z`) |
+| `DateTime` | UTC date-time string (for example, `2019-12-03T09:54:33Z`) |
 | `JSON` | JSON values per ECMA-404 |
 | `Port` | Valid TCP port (0-65535) |
 | `URL` | Standard URL format per RFC3986 |
@@ -1700,7 +1700,7 @@ mutation {
 
 ## Subscriptions
 
-Real-time updates via WebSocket:
+Real-time updates through WebSocket:
 
 ```graphql
 # Array state changes
@@ -1782,5 +1782,5 @@ query SystemStatus {
 - Sizes in `ArrayDisk` and `Share` are in **kilobytes (KB)**
 - Sizes in `Disk` and `DiskPartition` are in **bytes**
 - Temperature values are in **Celsius** unless `InfoDisplay.unit` is `FAHRENHEIT`
-- The API uses nested mutation types (e.g., `array.setState`, `docker.start`)
+- The API uses nested mutation types (for example, `array.setState`, `docker.start`)
 - VM mutations return `Boolean!`, not `VmDomain`

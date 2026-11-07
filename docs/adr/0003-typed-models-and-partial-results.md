@@ -1,19 +1,23 @@
 # Normalize server data while preserving meaningful query failures
 
-Domain-facing readers return Pydantic models whose base configuration ignores
-unknown fields, allowing additive server changes without forcing consumers to
-parse new response fields; existing raw readers and generic query/mutation methods
-remain available for compatibility. GraphQL responses with errors and at least
-one non-null root return the partial data, whereas responses with errors and no
-usable root raise a library exception. Ordinary query failures retain structured
-errors; complete authorization failures are classified separately as authentication
-exceptions without retaining the structured error list. This keeps useful optional data while
-requiring resource readers to handle nullable roots and consumers to distinguish
-query failure from a genuinely empty inventory.
+Typed readers return Pydantic models.
+The models ignore fields that they do not recognize.
+If the server adds fields, existing callers can continue to use the models.
+Callers can also use the raw readers and the generic query and mutation methods.
 
-See [base model](../../src/unraid_api/models.py),
-[query classification and resource readers](../../src/unraid_api/client.py),
-[model tests](../../tests/test_models.py), and
-[nullable-root and partial-result tests](../../tests/test_api_4378_compat.py).
-This describes the current contract, not a guarantee that every possible partial
-nested response is normalized identically.
+If a GraphQL response has errors and at least one root value, the client returns the available data.
+If the response has errors and no root value, the client raises a library exception.
+For ordinary query errors, the exception contains the structured errors.
+For a complete authorization failure, the client raises an authentication exception.
+The authentication exception does not contain the structured error list.
+
+Readers must handle null root values.
+A failed query and a successful query with an empty inventory have different meanings.
+Nested values in partial responses can have different rules.
+
+## Related files
+
+- [base model](../../src/unraid_api/models.py)
+- [query classification and resource readers](../../src/unraid_api/client.py)
+- [model tests](../../tests/test_models.py)
+- [nullable-root and partial-result tests](../../tests/test_api_4378_compat.py)
