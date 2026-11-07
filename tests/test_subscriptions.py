@@ -1106,3 +1106,51 @@ class TestTypedSubscriptions:
         assert subscribe_frame["type"] == "subscribe"
         assert "$operationId: ID!" in subscribe_frame["payload"]["query"]
         assert subscribe_frame["payload"]["variables"] == {"operationId": "op:1"}
+
+
+@pytest.mark.parametrize(("port", "port_suffix"), [(443, ""), (8443, ":8443")])
+async def test_cold_query_and_subscription_share_endpoint_discovery(
+    port: int, port_suffix: str
+) -> None:
+    """Both transports reuse one probe and respect the configured IPv6 authority."""
+    from asyncio import gather, sleep
+
+    session = MagicMock(spec=aiohttp.ClientSession)
+    discovery = session.get.return_value.__aenter__
+    discovery.return_value.status = 302
+    discovery.return_value.headers = {"Location": f"https://[::1]:{port}/graphql"}
+
+    async def yield_probe() -> MagicMock:
+        await sleep(0)
+        return discovery.return_value
+
+    discovery.side_effect = yield_probe
+    response = session.post.return_value.__aenter__.return_value
+    response.status = 200
+    response.raise_for_status = MagicMock()
+    response.json = AsyncMock(return_value={"data": {"ok": True}})
+    ws = MockWebSocket(
+        [
+            _ws_text_msg({"type": "connection_ack"}),
+            _ws_text_msg({"type": "complete"}),
+        ]
+    )
+    session.ws_connect = AsyncMock(return_value=ws)
+
+    async with UnraidClient(
+        "[::1]", "test-key", http_port=8080, https_port=port, session=session
+    ) as client:
+
+        async def subscribe() -> list[dict[str, Any]]:
+            return [event async for event in client.subscribe("subscription { ping }")]
+
+        result, events = await gather(client.query("query { ok }"), subscribe())
+
+    assert result == {"ok": True}
+    assert events == []
+    session.get.assert_called_once_with(
+        "http://[::1]:8080/graphql", allow_redirects=False
+    )
+    assert session.post.call_args.args[0] == f"https://[::1]{port_suffix}/graphql"
+    assert session.ws_connect.call_args.args[0] == f"wss://[::1]{port_suffix}/graphql"
+    session.close.assert_not_called()
