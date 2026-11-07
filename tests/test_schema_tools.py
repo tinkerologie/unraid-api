@@ -166,14 +166,18 @@ class TestInventory:
     def test_container_selections_are_non_empty_in_both_variants(
         self, inventory_v4376: st.Inventory
     ) -> None:
-        for builder in ("_build_containers_query", "_build_containers_query_safe"):
-            ops = _ops_from(inventory_v4376, builder)
+        for method in ("typed_get_containers", "typed_get_containers_safe"):
+            ops = [op for op in inventory_v4376.operations if method in op.methods]
             variants = {variant for op in ops for variant in op.variants}
             assert variants == {"permissive", "schema"}
             for op in ops:
                 assert "containers {" in op.document
                 assert "autoStart" in op.document
-        full = _ops_from(inventory_v4376, "_build_containers_query")
+        full = [
+            op
+            for op in inventory_v4376.operations
+            if "typed_get_containers" in op.methods
+        ]
         permissive = next(op for op in full if "permissive" in op.variants)
         schema = next(op for op in full if "schema" in op.variants)
         assert "tailscaleStatus" in permissive.document
@@ -388,7 +392,7 @@ class TestValidation:
         # Schema-derived container and VM operations validate; the permissive
         # variants request fields the trimmed fixture does not have.
         failing = {f.document for f in failures}
-        for builder in ("_build_containers_query", "typed_get_vms"):
+        for builder in ("build_container_query", "typed_get_vms"):
             ops = _ops_from(inventory_v4376, builder)
             schema_op = next(op for op in ops if "schema" in op.variants)
             assert schema_op.document not in failing
@@ -407,8 +411,10 @@ class TestCoordinates:
             "get_docker_networks",
             "typed_get_docker_networks",
         } <= docker.methods
-        builder = _def_line("_build_containers_query")
-        assert f"{st.CLIENT_PATH}:{_line_of('docker {', builder)}" in docker.locations
+        assert any(
+            location.startswith(f"{st.DOCKER_INVENTORY_PATH}:")
+            for location in docker.locations
+        )
         get_vms = _def_line("get_vms")
         assert index["Query.vms"].methods == {"get_vms", "typed_get_vms"}
         assert (
@@ -418,6 +424,17 @@ class TestCoordinates:
         uuid_line = _line_of('"uuid"', _def_line("typed_get_vms"))
         assert index["VmDomain.uuid"].locations == {f"{st.CLIENT_PATH}:{uuid_line}"}
         assert not [c for c in index if c.startswith("__") or ".__" in c]
+
+    def test_docker_profile_fields_point_to_their_declarations(self) -> None:
+        inventory = st.build_inventory()
+        (full,) = [
+            op for op in inventory.operations if "typed_get_containers" in op.methods
+        ]
+        origin = full.origins[0]
+        source = (st.REPO_ROOT / st.DOCKER_INVENTORY_PATH).read_text().splitlines()
+        for field in ("isUpdateAvailable", "tailscaleStatus", "exitNodeStatus"):
+            line = inventory.field_line(origin, field, 1)
+            assert f'"{field}"' in source[line - 1]
 
     def test_dynamic_field_falls_back_to_builder_line(
         self, inventory_v4376: st.Inventory

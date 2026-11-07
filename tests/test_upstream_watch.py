@@ -146,7 +146,13 @@ class TestAcceptance:
         assert docker["kind"] == "field_nullable"
         assert (docker["before"], docker["after"]) == ("Docker!", "Docker")
         assert set(docker["methods"]) | set(vms["methods"]) == EXPECTED_METHODS
-        assert all(loc.startswith(st.CLIENT_PATH) for loc in docker["locations"])
+        assert any(
+            loc.startswith(st.DOCKER_INVENTORY_PATH) for loc in docker["locations"]
+        )
+        assert all(
+            loc.startswith((st.CLIENT_PATH, st.DOCKER_INVENTORY_PATH))
+            for loc in docker["locations"]
+        )
 
         notes = {n["source"]: n for n in step["behaviour_notes"]}
         assert "introspection" in notes["unraid/api#2095"]["rules"]

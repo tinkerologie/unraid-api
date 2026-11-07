@@ -51,6 +51,7 @@ from graphql import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from unraid_api._docker_inventory import build_container_query  # noqa: E402
 from unraid_api.capabilities import (  # noqa: E402
     ServerCapabilities,
     build_introspection_query,
@@ -65,7 +66,8 @@ if TYPE_CHECKING:
 
 CLIENT_PATH = "src/unraid_api/client.py"
 CAPABILITIES_PATH = "src/unraid_api/capabilities.py"
-SOURCE_PATHS: tuple[str, ...] = (CLIENT_PATH, CAPABILITIES_PATH)
+DOCKER_INVENTORY_PATH = "src/unraid_api/_docker_inventory.py"
+SOURCE_PATHS: tuple[str, ...] = (CLIENT_PATH, CAPABILITIES_PATH, DOCKER_INVENTORY_PATH)
 
 UPSTREAM_REPO = "unraid/api"
 UPSTREAM_SCHEMA_PATH = "api/generated-schema.graphql"
@@ -323,14 +325,6 @@ def _render_client(caps: ServerCapabilities) -> UnraidClient:
     return client
 
 
-def _render_containers(caps: ServerCapabilities) -> str:
-    return _render_client(caps)._build_containers_query(caps)
-
-
-def _render_containers_safe(caps: ServerCapabilities) -> str:
-    return _render_client(caps)._build_containers_query_safe(caps)
-
-
 class _Sent(Exception):
     """Raised by the recording transport once the document has been sent."""
 
@@ -383,11 +377,24 @@ class DynamicSource:
     # Methods to attribute the operation to; None means the function's
     # transitive public callers.
     methods: tuple[str, ...] | None = None
+    module_fields: bool = False
 
 
 DYNAMIC_REGISTRY: tuple[DynamicSource, ...] = (
-    DynamicSource("_build_containers_query", CLIENT_PATH, _render_containers),
-    DynamicSource("_build_containers_query_safe", CLIENT_PATH, _render_containers_safe),
+    DynamicSource(
+        "build_container_query",
+        DOCKER_INVENTORY_PATH,
+        functools.partial(build_container_query, polling=False),
+        methods=("typed_get_containers",),
+        module_fields=True,
+    ),
+    DynamicSource(
+        "build_container_query",
+        DOCKER_INVENTORY_PATH,
+        functools.partial(build_container_query, polling=True),
+        methods=("typed_get_containers_safe",),
+        module_fields=True,
+    ),
     DynamicSource("typed_get_vms", CLIENT_PATH, _render_vms),
     # One literal document; the field is swapped per public method at runtime.
     DynamicSource(
@@ -443,6 +450,7 @@ class Origin:
     path: str
     line: int
     dynamic: bool = False
+    module_fields: bool = False
 
     def __str__(self) -> str:
         return f"{self.path}:{self.line}"
@@ -492,6 +500,11 @@ class Inventory:
         for number in range(start, end + 1):
             if pattern.search(source[number - 1]):
                 return number
+        if origin.module_fields:
+            # Dedicated query modules can declare fields outside their renderer.
+            for number, line in enumerate(source, start=1):
+                if pattern.search(line):
+                    return number
         return def_line
 
 
@@ -556,7 +569,13 @@ def build_inventory(
             if source.methods is not None
             else public_callers(source.function, callers)
         )
-        origin = Origin(source.function, source.path, def_line, dynamic=True)
+        origin = Origin(
+            source.function,
+            source.path,
+            def_line,
+            dynamic=True,
+            module_fields=source.module_fields,
+        )
         for variant, caps in variants:
             document = source.render(caps)
             if document is None:
