@@ -425,6 +425,17 @@ class TestCoordinates:
         assert index["VmDomain.uuid"].locations == {f"{st.CLIENT_PATH}:{uuid_line}"}
         assert not [c for c in index if c.startswith("__") or ".__" in c]
 
+    def test_docker_profile_fields_point_to_their_declarations(self) -> None:
+        inventory = st.build_inventory()
+        (full,) = [
+            op for op in inventory.operations if "typed_get_containers" in op.methods
+        ]
+        origin = full.origins[0]
+        source = (st.REPO_ROOT / st.DOCKER_INVENTORY_PATH).read_text().splitlines()
+        for field in ("isUpdateAvailable", "tailscaleStatus", "exitNodeStatus"):
+            line = inventory.field_line(origin, field, 1)
+            assert f'"{field}"' in source[line - 1]
+
     def test_dynamic_field_falls_back_to_builder_line(
         self, inventory_v4376: st.Inventory
     ) -> None:
