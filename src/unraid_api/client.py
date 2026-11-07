@@ -159,6 +159,7 @@ class UnraidClient:
         self._session: aiohttp.ClientSession | None = session
         self._owns_session: bool = session is None
         self._resolved_url: str | None = None
+        self._endpoint_lock = asyncio.Lock()
         self._capabilities: ServerCapabilities | None = None
         self._capabilities_lock: asyncio.Lock = asyncio.Lock()
 
@@ -590,13 +591,8 @@ class UnraidClient:
             UnraidTimeoutError: On request timeout.
 
         """
-        if self._session is None:
-            await self._create_session()
-
-        if self._session is None:
-            raise UnraidConnectionError("Failed to create HTTP session")
-
         if require_https:
+            session = await self._require_session()
             # Unlock requests use only the configured authority, without HTTP discovery
             # or shared URL cache changes that could affect ordinary requests.
             configured = urlparse(f"https://{self._normalize_host_for_request()}")
@@ -609,32 +605,7 @@ class UnraidClient:
             port_suffix = f":{port}" if port != DEFAULT_HTTPS_PORT else ""
             url = f"https://{hostname}{port_suffix}/graphql"
         else:
-            if self._resolved_url is None:
-                redirect_url, use_ssl = await self._discover_redirect_url()
-                if redirect_url:
-                    self._resolved_url = redirect_url
-                else:
-                    request_host = self._normalize_host_for_request()
-                    if use_ssl:
-                        protocol = "https"
-                        port_suffix = (
-                            f":{self.https_port}"
-                            if self.https_port != DEFAULT_HTTPS_PORT
-                            else ""
-                        )
-                    else:
-                        protocol = "http"
-                        port_suffix = (
-                            f":{self.http_port}"
-                            if self.http_port != DEFAULT_HTTP_PORT
-                            else ""
-                        )
-                    self._resolved_url = (
-                        f"{protocol}://{request_host}{port_suffix}/graphql"
-                    )
-                _LOGGER.debug("Using URL: %s", self._sanitize_url(self._resolved_url))
-
-            url = self._resolved_url
+            session, url = await self._resolve_endpoint()
         request_options: dict[str, Any] = {}
         if require_https:
             if not self.verify_ssl:
@@ -646,7 +617,7 @@ class UnraidClient:
             request_options["ssl"] = await asyncio.to_thread(ssl.create_default_context)
 
         try:
-            async with self._session.post(
+            async with session.post(
                 url,
                 json=payload,
                 headers=self._auth_headers,
@@ -685,7 +656,7 @@ class UnraidClient:
                             )
                         if not require_https:
                             self._resolved_url = redirect_url
-                        async with self._session.post(
+                        async with session.post(
                             redirect_url,
                             json=payload,
                             headers=self._auth_headers,
@@ -950,33 +921,34 @@ class UnraidClient:
             return "ws://" + url[len("http://") :]
         return url
 
-    async def _ensure_resolved_url(self) -> None:
-        """Ensure the HTTP URL is resolved (session + redirect discovery)."""
+    async def _require_session(self) -> aiohttp.ClientSession:
+        """Return the injected or client-owned HTTP session."""
         if self._session is None:
             await self._create_session()
         if self._session is None:
             raise UnraidConnectionError("Failed to create HTTP session")
-        if self._resolved_url is None:
-            redirect_url, use_ssl = await self._discover_redirect_url()
-            if redirect_url:
-                self._resolved_url = redirect_url
-            else:
-                request_host = self._normalize_host_for_request()
-                if use_ssl:
-                    protocol = "https"
-                    port_suffix = (
-                        f":{self.https_port}"
-                        if self.https_port != DEFAULT_HTTPS_PORT
-                        else ""
-                    )
+        return self._session
+
+    async def _resolve_endpoint(self) -> tuple[aiohttp.ClientSession, str]:
+        """Resolve the ordinary GraphQL endpoint once across both transports."""
+        session = await self._require_session()
+        if self._resolved_url is not None:
+            return session, self._resolved_url
+
+        async with self._endpoint_lock:
+            if self._resolved_url is None:
+                redirect_url, use_ssl = await self._discover_redirect_url()
+                if redirect_url:
+                    self._resolved_url = redirect_url
                 else:
-                    protocol = "http"
-                    port_suffix = (
-                        f":{self.http_port}"
-                        if self.http_port != DEFAULT_HTTP_PORT
-                        else ""
-                    )
-                self._resolved_url = f"{protocol}://{request_host}{port_suffix}/graphql"
+                    protocol = "https" if use_ssl else "http"
+                    port = self.https_port if use_ssl else self.http_port
+                    default_port = DEFAULT_HTTPS_PORT if use_ssl else DEFAULT_HTTP_PORT
+                    suffix = "" if port == default_port else f":{port}"
+                    host = self._normalize_host_for_request()
+                    self._resolved_url = f"{protocol}://{host}{suffix}/graphql"
+                _LOGGER.debug("Using URL: %s", self._sanitize_url(self._resolved_url))
+            return session, self._resolved_url
 
     @property
     def _ws_receive_timeout(self) -> int:
@@ -1087,11 +1059,7 @@ class UnraidClient:
                 print(stats)
 
         """
-        await self._ensure_resolved_url()
-        if self._session is None:  # pragma: no cover
-            err_msg = "Session not initialized"
-            raise UnraidConnectionError(err_msg)
-
+        await self._resolve_endpoint()
         ws_url = self._get_ws_url()
         sub_id = uuid.uuid4().hex[:8]
 

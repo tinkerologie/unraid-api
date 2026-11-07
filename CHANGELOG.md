@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Contributor domain glossary and numbered records of existing architecture decisions, with links to implementation and regression tests.
 
+### Fixed
+
+- Concurrent HTTP queries and WebSocket subscriptions share one endpoint probe and reuse the resolved endpoint ([#157](https://github.com/tinkerologie/unraid-api/issues/157)).
+
 ## [1.15.1] - 2026-11-01
 
 ### Fixed
