@@ -111,7 +111,7 @@ uv run ruff format .
 uv run mypy src/
 ```
 
-**Pre-commit MUST always be run before any commit.**
+**Run pre-commit before each commit.**
 
 ### Usage Example
 ```python
@@ -137,7 +137,7 @@ async with UnraidClient("192.168.1.100", "your-api-key") as client:
 
 ## Documentation Requirements
 
-**README.md and CHANGELOG.md MUST always be kept up to date.**
+**Keep README.md and CHANGELOG.md current.**
 
 ### README.md
 - Update API Reference tables when adding new methods
@@ -152,7 +152,7 @@ async with UnraidClient("192.168.1.100", "your-api-key") as client:
 
 ## Versioning
 
-**Version numbers MUST be updated when new features or bug fixes are made.**
+**Update version numbers for new features and bug fixes.**
 
 ### Semantic Versioning
 - **MAJOR** (X.0.0): Breaking API changes

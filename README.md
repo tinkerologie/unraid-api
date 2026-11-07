@@ -288,7 +288,7 @@ Use the Unraid Core storage workflow.
 | `get_vms()` | `list[dict]` | Virtual machines |
 | `get_ups_status()` | `list[dict]` | UPS devices |
 | `get_notifications()` | `dict` | Raw notification overview and list |
-| `typed_get_notifications()` | `list[Notification]` | One filtered page of notifications, with normalized timestamps. Malformed items are skipped and a missing or invalid page raises `UnraidAPIError`. |
+| `typed_get_notifications()` | `list[Notification]` | One filtered page of notifications, with normalized timestamps. The reader skips malformed items. It raises `UnraidAPIError` if the page is missing or invalid. |
 | `get_parity_history()` | `list[dict]` | Parity check history |
 | `get_services()` | `list[dict]` | System services |
 | `get_plugins()` | `list[dict]` | Installed plugins |
@@ -448,7 +448,7 @@ Apache License 2.0 - see [LICENSE](LICENSE) for details. Earlier releases use th
 ## Contributing
 
 Contributions welcome! Please make sure:
-1. Tests are written first (TDD)
+1. Write tests first (TDD)
 2. No linting errors (`ruff check . && mypy src/`)
 3. GraphQL variables used (no string interpolation)
 
@@ -460,6 +460,5 @@ Contributions welcome! Please make sure:
 
 ## Domain and architecture
 
-Contributor terminology is defined in [GLOSSARY.md](GLOSSARY.md). Existing
-architecture decisions and their source evidence are indexed in
+Use [GLOSSARY.md](GLOSSARY.md) for project terms. Find architecture decisions and links to their sources in
 [docs/adr/README.md](docs/adr/README.md).

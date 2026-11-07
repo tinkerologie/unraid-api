@@ -41,7 +41,7 @@ All AI coding agents must follow these steps.
 - `pre-commit run --all-files` — Run all configured pre-commit hooks
 
 `script/` holds the repository tooling (`schema_tools.py`, `upstream_watch.py`). Unlike
-`scripts/`, it is linted, type-checked and covered by tests like the library.
+`scripts/`, the `script/` directory has lint checks, type checks, and tests like the library.
 
 Use `uv` to manage dependencies. Run the tools above with `uv run`, for example
 `uv run pytest`. The pre-commit hooks run ruff, mypy and security checks.
@@ -69,7 +69,7 @@ See `UNRAIDAPI.md` for available GraphQL fields and schema documentation.
 ### Client Design
 
 - **Async context manager**: `async with UnraidClient(host, api_key) as client:`
-- **Session injection**: Accepts external `aiohttp.ClientSession` for HA integration (will not be closed by client)
+- **Session injection**: Accepts an external `aiohttp.ClientSession` for Home Assistant. The client leaves the session open.
 - **SSL auto-discovery**: Handles Unraid's "No", "Yes", and "Strict" SSL modes through redirect detection
 - **GraphQL variables**: Always use variables, never string interpolation for security
 
@@ -128,13 +128,13 @@ Before implementing:
 
 **Minimum code that solves the problem. Nothing speculative.**
 
-- No features beyond what was asked.
+- Add only the features the user requests.
 - No abstractions for single-use code.
 - No "flexibility" or "configurability" that was not requested.
 - No error handling for impossible scenarios.
 - If you write 200 lines and it could be 50, rewrite it.
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+Check whether the change is more complex than necessary. If it is, simplify it.
 
 ### Surgical Changes
 

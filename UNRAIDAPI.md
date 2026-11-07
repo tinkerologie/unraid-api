@@ -1072,7 +1072,7 @@ type ProfileModel {
 
 Both install mutations install software and return a background operation.
 `installLanguage` accepts a language-pack URL, not a language code. Optional
-`name` and `forced` values are passed in `InstallPluginInput` alongside `url`.
+Pass `name` and `forced` in `InstallPluginInput` with `url`.
 Follow progress with `pluginInstallUpdates(operationId: ...)`.
 
 ```graphql
