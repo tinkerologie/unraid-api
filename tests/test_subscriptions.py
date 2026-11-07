@@ -1108,14 +1108,17 @@ class TestTypedSubscriptions:
         assert subscribe_frame["payload"]["variables"] == {"operationId": "op:1"}
 
 
-async def test_cold_query_and_subscription_share_endpoint_discovery() -> None:
+@pytest.mark.parametrize(("port", "port_suffix"), [(443, ""), (8443, ":8443")])
+async def test_cold_query_and_subscription_share_endpoint_discovery(
+    port: int, port_suffix: str
+) -> None:
     """Both transports reuse one probe and respect the configured IPv6 authority."""
     from asyncio import gather, sleep
 
     session = MagicMock(spec=aiohttp.ClientSession)
     discovery = session.get.return_value.__aenter__
     discovery.return_value.status = 302
-    discovery.return_value.headers = {"Location": "https://[::1]:8443/graphql"}
+    discovery.return_value.headers = {"Location": f"https://[::1]:{port}/graphql"}
 
     async def yield_probe() -> MagicMock:
         await sleep(0)
@@ -1135,7 +1138,7 @@ async def test_cold_query_and_subscription_share_endpoint_discovery() -> None:
     session.ws_connect = AsyncMock(return_value=ws)
 
     async with UnraidClient(
-        "[::1]", "test-key", http_port=8080, https_port=8443, session=session
+        "[::1]", "test-key", http_port=8080, https_port=port, session=session
     ) as client:
 
         async def subscribe() -> list[dict[str, Any]]:
@@ -1148,6 +1151,6 @@ async def test_cold_query_and_subscription_share_endpoint_discovery() -> None:
     session.get.assert_called_once_with(
         "http://[::1]:8080/graphql", allow_redirects=False
     )
-    assert session.post.call_args.args[0] == "https://[::1]:8443/graphql"
-    assert session.ws_connect.call_args.args[0] == "wss://[::1]:8443/graphql"
+    assert session.post.call_args.args[0] == f"https://[::1]{port_suffix}/graphql"
+    assert session.ws_connect.call_args.args[0] == f"wss://[::1]{port_suffix}/graphql"
     session.close.assert_not_called()

@@ -506,7 +506,12 @@ class UnraidClient:
                                 return (None, False)
                             port = parsed.port
                             if port == DEFAULT_HTTPS_PORT:
-                                normalized = f"https://{hostname}{parsed.path}"
+                                authority = (
+                                    f"[{hostname}]"
+                                    if hostname and ":" in hostname
+                                    else hostname
+                                )
+                                normalized = f"https://{authority}{parsed.path}"
                             else:
                                 # Normalize to strip query params and fragments
                                 normalized = urlunparse(
