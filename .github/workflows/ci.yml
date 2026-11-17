@@ -16,6 +16,7 @@ env:
 
 jobs:
   lint:
+    timeout-minutes: 30
     name: Lint
     runs-on: ubuntu-latest
 
@@ -46,6 +47,7 @@ jobs:
         run: uv run mypy src/ script/
 
   test:
+    timeout-minutes: 30
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
@@ -80,8 +82,8 @@ jobs:
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           slug: ${{ github.repository }}
-          use_oidc: ${{ env.CODECOV_OIDC == 'true' }}
-          fail_ci_if_error: ${{ env.CODECOV_OIDC == 'true' }}
+          use_oidc: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          fail_ci_if_error: false
 
   ci-gate:
     name: CI Gate

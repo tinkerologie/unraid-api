@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   scan:
+    timeout-minutes: 10
     name: Scan
     runs-on: ubuntu-latest
     permissions:
@@ -66,6 +67,7 @@ jobs:
           retention-days: 30
 
   report:
+    timeout-minutes: 10
     name: Report
     needs: scan
     # Writes only to this repository: never to unraid/api, never from a fork,
