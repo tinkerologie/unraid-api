@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
+from pydantic import ValidationError
 
 from unraid_api._docker_inventory import build_container_query, decode_containers
 from unraid_api.capabilities import ServerCapabilities, build_introspection_query
@@ -23,6 +24,7 @@ from unraid_api.exceptions import (
     UnraidSSLError,
     UnraidTimeoutError,
 )
+from unraid_api.models import Notification
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -49,7 +51,6 @@ if TYPE_CHECKING:
         MemoryMetrics,
         Network,
         NetworkMetrics,
-        Notification,
         NotificationOverview,
         Owner,
         ParityCheck,
@@ -2725,10 +2726,6 @@ class UnraidClient:
         Invalid items are skipped. A missing, null, or malformed page raises
         UnraidAPIError, while a valid empty page returns an empty list.
         """
-        from pydantic import ValidationError
-
-        from unraid_api.models import Notification
-
         result = await self._query_notifications(notification_type, limit, offset)
         root = result.get("notifications")
         items = root.get("list") if isinstance(root, dict) else None
