@@ -11,6 +11,10 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Apply ASD-STE100 Issue 9 to project documentation. Add a writing guide for contributors.
 
+### Fixed
+
+- `typed_get_notifications()` no longer triggers Home Assistant's blocking `import_module` warning because `UnraidClient` imports `ValidationError` and `Notification` at module scope ([#178](https://github.com/tinkerologie/unraid-api/issues/178)).
+
 ## [1.16.0] - 2026-11-07
 
 ### Changed
